@@ -1,0 +1,436 @@
+
+# Setup script for CLIF project validating risk tools in oncology.
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# setup ------------------------------------------------------------------------
+
+## libraries -------------------------------------------------------------------
+
+packages_to_install =
+  c(
+    "data.table",
+    "tidyverse",
+    "tidytable",
+    "collapse",
+    "arrow",
+    "rvest", 
+    "readr", 
+    "yaml",
+    "here",
+    "fst"
+  )
+
+packages_to_load = 
+  c(
+    "tidytable",
+    "collapse",
+    "stringr",
+    "arrow",
+    "here"
+  )
+
+fn_install_if_mi = function(package) {
+  if (!require(package, character.only = T)) {install.packages(package, dependencies = T)}
+}
+
+fn_load = function(package) {
+  library(package, character.only = TRUE)
+}
+
+sapply(packages_to_install, fn_install_if_mi)
+sapply(packages_to_load, fn_load)
+rm(packages_to_install, packages_to_load, fn_install_if_mi, fn_load)
+gc()
+
+## environment -----------------------------------------------------------------
+
+### site details ---------------------------------------------------------------
+
+config        = yaml::read_yaml(here("config", "config_clif_oncrisk.yaml"))
+site_details  = fread(here("config", "clif_sites.csv"))
+allowed_sites = site_details$site_name
+allowed_files = c("parquet", "csv", "fst")
+
+### user enters site details ---------------------------------------------------
+
+site_lowercase   = tolower(config$site_lowercase)
+file_type        = tolower(config$file_type)  
+tables_location  = config$clif_data_location # here("../_clif_data/v_2.1") 
+project_location = config$project_location
+
+### site_name must be a valid clif site in lowercase ---------------------------
+
+if (!(site_lowercase %in% allowed_sites)) {
+  stop(
+    paste0(
+      "Invalid '", 
+      site_lowercase,
+      "'. Expected one of: ", 
+      paste(allowed_sites, collapse = ", ")
+    )
+  )
+}
+
+### file_type must be one of c(parquet, csv) -----------------------------------
+
+if (!(file_type %in% allowed_files)) {
+  stop(
+    paste0(
+      "Invalid '", 
+      file_type,
+      "'. Expected one of: ", 
+      paste(allowed_file_types, collapse = ", ")
+    )
+  )
+}
+
+### pull time zone from site details -------------------------------------------
+
+site_time_zone = 
+  fsubset(site_details, site_name == site_lowercase) |>
+  select(tz) |>
+  tibble::deframe()
+
+### file locations -------------------------------------------------------------
+
+if (!dir.exists(paste0(project_location, "/proj_tables"))) {
+  dir.create(paste0(project_location, "/proj_tables"))
+}
+if (!dir.exists(paste0(project_location, "/proj_output"))) {
+  dir.create(paste0(project_location, "/proj_output"))
+}
+
+### dates ----------------------------------------------------------------------
+
+start_date = as.POSIXct("2016-01-01", tz = site_time_zone)
+end_date   = as.POSIXct("2024-12-31", tz = site_time_zone)
+today      = format(Sys.Date(), "%y%m%d")
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# data -------------------------------------------------------------------------
+
+## clif tables needed for project ----------------------------------------------
+
+required_tables = 
+  c(
+    "patient", 
+    "hospital_diagnosis",
+    "hospitalization", 
+    "adt", 
+    "vitals", 
+    "labs", 
+    "medication_admin_continuous", 
+    "respiratory_support",
+    "code_status"
+  )
+
+## check required tables against available tables ------------------------------
+
+clif_table_filenames = 
+  list.files(
+    path       = tables_location, 
+    pattern    = paste0("^clif_.*\\.", file_type, "$"), 
+    full.names = TRUE
+  )
+
+clif_table_basenames = 
+  basename(clif_table_filenames) |>
+  str_remove(paste0("\\.", file_type, "$")) |> # remove extension
+  str_remove("^clif_") |>                      # remove leading 'clif_'
+  str_remove("(_\\d{4}(_\\d{4})*)$")           # remove any date ranges in file name
+
+table_file_map     = setNames(clif_table_filenames, clif_table_basenames)
+missing_tables     = setdiff(required_tables, clif_table_basenames)
+required_filenames = table_file_map[required_tables]
+
+if (length(missing_tables) > 0) {
+  stop(paste("Error: Missing required tables:", paste(missing_tables, collapse = ", ")))
+} else {
+  message("All required tables are present.")
+}
+
+rm(site_details, allowed_files, allowed_sites, missing_tables)
+gc()
+
+## load tables -----------------------------------------------------------------
+
+if (file_type == "parquet") {
+  data_list = lapply(required_filenames, open_dataset)
+} else if (file_type == "csv") {
+  data_list = lapply(required_filenames, \(f) read_csv_arrow(f))
+} else if (file_type == "fst") {
+  data_list = lapply(required_filenames, \(f) {
+    tmp = read.fst(f, as.data.table = TRUE)
+    arrow_table(tmp)
+  })
+} else {
+  stop("Unsupported file format")
+}
+
+names(data_list) = names(required_filenames)
+
+## validate table contents -----------------------------------------------------
+
+### function to validate a table -----------------------------------------------
+
+validate_table = function(tbl, table_name, req_vars = NULL, req_values = list()) {
+  
+  problems     = character()
+  missing_vars = setdiff(req_vars, names(tbl))
+  
+  if (length(missing_vars)) {
+    problems = c(problems, sprintf("Missing required vars: %s", paste(missing_vars, collapse = ", ")))
+  }
+  
+  for (var in names(req_values)) {
+    if (!var %in% names(tbl)) {
+      problems = c(problems, sprintf("Missing '%s' needed for value checks.", var))
+      next
+    }
+    
+    ### special handling for FileSystemDataset
+    if (inherits(tbl, "FileSystemDataset")) {
+      # message(sprintf("  • Extracting from FileSystemDataset: '%s'", var))
+      
+      tryCatch({
+        value_counts =
+          dplyr::select(tbl, !!rlang::sym(var)) |>
+          dplyr::group_by(!!rlang::sym(var)) |>
+          dplyr::summarize(n = dplyr::n()) |>
+          dplyr::arrange(dplyr::desc(n)) |>
+          dplyr::collect()
+        
+        if (nrow(value_counts) > 0) {
+          present_vals = na.omit(as.character(value_counts[[var]]))
+          message(sprintf("    Found %d unique values", length(present_vals)))
+        } else {
+          present_vals = character(0)
+          message("    No values found, dataset may be empty")
+        }
+      }, error = function(e) {
+        message(sprintf("    Error extracting values: %s", e$message))
+        present_vals = character(0)
+      })
+      
+      ### last resort for FileSystemDatasets if counting fails - scan the first N rows
+      if (length(present_vals) == 0) {
+        tryCatch({
+          sample_data =
+            dplyr::select(tbl, !!rlang::sym(var)) |>
+            utils::head(1000) |>
+            dplyr::collect()
+          
+          if (nrow(sample_data) > 0) {
+            present_vals = na.omit(unique(as.character(sample_data[[var]])))
+            message(sprintf("    Found %d values by scanning first rows", length(present_vals)))
+          }
+        }, error = function(e) {
+          message(sprintf("    Scan approach failed: %s", e$message))
+        })
+      }
+    } else if (!is.data.frame(tbl) && inherits(tbl, "Table")) {
+      
+      message(sprintf("  • Extracting from Arrow Table: '%s'", var))
+      
+      tryCatch({
+        distinct_vals = tbl |>
+          dplyr::select(!!rlang::sym(var)) |>
+          dplyr::distinct() |>
+          dplyr::collect()
+        
+        if (nrow(distinct_vals) > 0) {
+          present_vals = na.omit(as.character(distinct_vals[[var]]))
+          message(sprintf("    Found %d distinct values", length(present_vals)))
+        } else {
+          present_vals = character(0)
+        }
+      }, error = function(e) {
+        message(sprintf("    Error extracting values: %s", e$message))
+        present_vals = character(0)
+      })
+    } else {
+      present_vals = na.omit(unique(as.character(tbl[[var]])))
+      message(sprintf("  • Extracted from data.frame: %d values for '%s'", length(present_vals), var))
+    }
+    
+    present_vals  = tolower(trimws(as.character(present_vals)))
+    expected_vals = unique(tolower(trimws(req_values[[var]])))
+    missing_vals  = setdiff(expected_vals, present_vals)
+    
+    message(sprintf(
+      "  • [%s] '%s' has values: %s", table_name, var,
+      if (length(present_vals)) paste(sort(present_vals), collapse = ", ")
+      else "<NONE>"
+    ))
+    message(sprintf("    expecting: %s", paste(sort(expected_vals), collapse = ", ")))
+    
+    if (length(missing_vals)) {
+      problems = c(
+        problems,
+        sprintf("Variable '%s' is missing expected values: %s", var, paste(missing_vals, collapse = ", "))
+      )
+    }
+  }
+  
+  if (length(problems)) {
+    return(sprintf("Table '%s':\n- %s", table_name, paste(problems, collapse = "\n- ")))
+  }
+  
+  invisible(NULL)
+}
+
+### function to validate all tables --------------------------------------------
+
+validate_all_tables = function(data_list, validation_specs) {
+  all_problems = character()
+  
+  message("Data list contents:")
+  for (name in names(data_list)) {
+    obj       = data_list[[name]]
+    obj_class = paste(class(obj), collapse = ", ")
+    message(sprintf("  • '%s': class=%s", name, obj_class))
+  }
+  
+  for (spec in validation_specs) {
+    tbl_name = spec$table_name
+    if (!tbl_name %in% names(data_list)) {
+      all_problems = c(all_problems, sprintf("Table '%s' is missing entirely.", tbl_name))
+      next
+    }
+    
+    tbl = data_list[[tbl_name]]
+    
+    message(sprintf("\nValidating table '%s'", tbl_name))
+    
+    if (inherits(tbl, "FileSystemDataset")) {
+      tryCatch({
+        message(sprintf("  Schema fields: %s", paste(names(tbl$schema), collapse=", ")))
+      }, error = function(e) {
+        message(sprintf("  Error reading schema: %s", e$message))
+      })
+    }
+    
+    tbl_problems = 
+      validate_table(
+        tbl        = tbl,
+        table_name = tbl_name,
+        req_vars   = spec$req_vars,
+        req_values = spec$req_values
+      )
+    
+    if (!is.null(tbl_problems)) all_problems = c(all_problems, tbl_problems)
+  }
+  
+  if (length(all_problems)) {
+    stop("Validation errors found:\n", paste(all_problems, collapse = "\n\n"), call. = F)
+  }
+  message("✅ All validations passed.")
+}
+
+### list the details of each table's required elements -------------------------
+
+#### prep vitals and labs separately, as they're used more than once -----------
+
+req_vitals = 
+  c(
+    "heart_rate", 
+    "respiratory_rate", 
+    "sbp", 
+    "spo2", 
+    "temp_c"
+  )
+
+req_labs = 
+  c(
+    "bilirubin_total",
+    "bun",
+    "creatinine",
+    "hemoglobin",
+    "lactate",
+    "pco2_arterial",
+    "po2_arterial",
+    "ph_arterial",
+    "platelet_count",
+    "so2_arterial",
+    "wbc"
+  )
+
+#### make lists of other tables' validation requirements -----------------------
+
+patient_list = 
+  list(
+    table_name = "patient",
+    req_vars   = c("patient_id", "race_category", "ethnicity_category", "sex_category"),
+    req_values = list(
+      sex_category       = c("Female", "Male"),
+      race_category      = c("White", "Black or African American", "Asian"),
+      ethnicity_category = c("Hispanic", "Non-Hispanic")
+    )
+  )
+
+hosp_list = 
+  list(
+    table_name = "hospitalization",
+    req_vars   = c(
+      "patient_id", 
+      "hospitalization_id", 
+      "age_at_admission", 
+      "admission_dttm", 
+      "discharge_dttm", 
+      "discharge_category"
+    ),
+    req_values = list(discharge_category = c("Hospice", "Expired"))
+  )
+
+adt_list = 
+  list(
+    table_name = "adt",
+    req_vars   = c("hospitalization_id", "location_category", "in_dttm", "out_dttm"),
+    req_values = list(location_category = c("ed", "icu", "ward"))
+  )
+
+med_list = 
+  list(
+    table_name = "medication_admin_continuous",
+    req_vars   = c("med_group", "med_category"),
+    req_values = list(
+      med_group    = c("vasoactives"),
+      med_category = c("norepinephrine", "vasopressin", "epinephrine")
+    )
+  )
+
+resp_list = 
+  list(
+    table_name = "respiratory_support",
+    req_vars   = c("device_category"),
+    req_values = list(device_category = c("IMV"))
+  )
+
+vitals_list = 
+  list(
+    table_name = "vitals",
+    req_vars   = c("vital_category", "vital_value", "recorded_dttm"),
+    req_values = list(vital_category = req_vitals)
+  )
+
+labs_list = 
+  list(
+    table_name = "labs",
+    req_vars   = c("lab_category", "lab_value", "lab_result_dttm"),
+    req_values = list(lab_category = req_labs)
+  )
+
+validation_specs = list(patient_list, hosp_list, adt_list, med_list, resp_list, vitals_list, labs_list)
+
+## run validation functions ----------------------------------------------------
+
+validate_all_tables(data_list, validation_specs)
+
+rm(labs_list, vitals_list, resp_list, med_list, adt_list, hosp_list, patient_list)
+rm(validation_specs, clif_table_basenames, clif_table_filenames, required_filenames)
+rm(required_tables, table_file_map, validate_all_tables, validate_table)
+gc()
+
+# go to script 01
