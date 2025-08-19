@@ -2,6 +2,54 @@
 # Cohort script for CLIF project validating risk tools in oncology.
 # Requires data_list to be loaded/validated from 00_*
 
+# resources for RAM heavy wrangling --------------------------------------------
+
+## cores & RAM (reuse from 00 if available) ------------------------------------
+os_type   = if (exists("os_type"))   os_type   else Sys.info()[["sysname"]]
+all_cores = if (exists("all_cores")) all_cores else {
+  x = parallel::detectCores(logical = TRUE); if (is.na(x)) 1L else as.integer(x)
+}
+
+if (!exists("avail_ram_gb") || !is.finite(avail_ram_gb)) {
+  get_ram_gb = function() {
+    tryCatch({
+      if (Sys.info()[["sysname"]] == "Darwin") {
+        bytes = suppressWarnings(as.numeric(system("sysctl -n hw.memsize", intern = TRUE)))
+        if (length(bytes) > 0 && !is.na(bytes)) bytes / 1024^3 else NA_real_
+      } else if (file.exists("/proc/meminfo")) {
+        kb = suppressWarnings(as.numeric(system("awk '/MemAvailable/ {print $2}' /proc/meminfo", intern = TRUE)))
+        if (length(kb) > 0 && !is.na(kb)) kb / 1024^2 else NA_real_
+      } else if (requireNamespace("ps", quietly = TRUE)) {
+        ps::ps_system_memory()[["available"]] / 1024^3
+      } else NA_real_
+    }, error = function(e) NA_real_)
+  }
+  avail_ram_gb = get_ram_gb()
+}
+
+## choose threads (2 GB per thread; leave 1 core free) -------------------------
+
+reserve_cores = 1L
+gb_per_thread = 2.0
+max_by_cores  = max(1L, all_cores - reserve_cores)
+max_by_memory = if (is.finite(avail_ram_gb)) max(1L, floor(avail_ram_gb / gb_per_thread)) else max_by_cores
+n_threads     = as.integer(max(1L, min(max_by_cores, max_by_memory)))
+n_math_threads= as.integer(max(1L, min(n_threads, 8L)))
+
+## apply thread settings -------------------------------------------------------
+
+data.table::setDTthreads(threads = n_threads)
+collapse::set_collapse(nthreads  = n_threads)
+options(arrow.use_threads        = TRUE)
+Sys.setenv(ARROW_NUM_THREADS     = n_threads)
+options(mc.cores                 = n_threads)
+
+message(
+  sprintf("01 resources | OS=%s | Cores=%d | Threads=%d | MathThreads=%d | Avail RAM≈%s GB (rule: 2 GB/core)",
+          os_type, all_cores, n_threads, n_math_threads,
+          ifelse(is.finite(avail_ram_gb), round(avail_ram_gb, 1), "NA"))
+)
+
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 # cohort identification --------------------------------------------------------
@@ -20,7 +68,6 @@ hosp_blocks =
 
 ### use data.table to find joined hospitalizations with <= 6h gaps -------------
 
-library(data.table)
 link_hours = 6L
 linked     = as.data.table(hosp_blocks)
 setorder(linked, patient_id, admission_dttm)
@@ -828,3 +875,4 @@ keep = c(
 
 rm(list = setdiff(ls(), keep)); gc()
 
+# go to 02
