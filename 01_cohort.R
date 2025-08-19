@@ -56,7 +56,7 @@ hosp_blocks =
   roworder(patient_id, admission_dttm)
 
 library(data.table)
-link_hours = 6
+link_hours = 6L
 linked     = as.data.table(hosp_blocks)
 setorder(linked, patient_id, admission_dttm)
 
@@ -170,7 +170,7 @@ post_death_admissions =
   fsubset(admission_dttm >= death_instant) 
 
 if (nrow(post_death_admissions) > 0) {
-  cohort = fsubset(cohort, !joined_hosp_id %in% post_death_encounters$joined_hosp_id)
+  cohort = fsubset(cohort, !joined_hosp_id %in% post_death_admissions$joined_hosp_id)
   
   message(
     sprintf("Removed %d post-death encs for %d patients (? organ donors): %s",
@@ -545,7 +545,16 @@ icu =
   select(joined_hosp_id, in_dttm, location_category) |>
   funique() |>
   join(date_frame, how = "inner", multiple = T) |>
-  fsubset(in_dttm >= admission_dttm & in_dttm <= discharge_dttm) 
+  fsubset(in_dttm >= admission_dttm & in_dttm <= discharge_dttm) |>
+  fmutate(location_category = tolower(location_category))
+
+### set aside all icu encounters -----------------------------------------------
+
+icu_encs = 
+  fsubset(icu, location_category == "icu") |>
+  select(joined_hosp_id) |>
+  funique() |>
+  tibble::deframe()
 
 ### identify ward-icu transfer moments -----------------------------------------
 
@@ -604,7 +613,7 @@ df_outcomes =
   ) |>
   select(joined_hosp_id, starts_with("outcome"))
 
-fwrite(df_outcomes, here("project_tables", "outcome_times.csv"))
+fwrite(df_outcomes, here("proj_tables", "outcome_times.csv"))
 
 rm(df_outcomes, death, hospice, icu); gc()
 
@@ -617,9 +626,7 @@ va_list = c(
   "vasopressin",
   "phenylephrine",
   "epinephrine",
-  "dopamine",
-  "milrinone",
-  "dobutamine"
+  "dopamine"
 )
 
 meds = 
@@ -635,25 +642,9 @@ meds =
   fsubset(admin_dttm >= admission_dttm) |>
   fsubset(admin_dttm <= discharge_dttm) |>
   fmutate(med_category = tolower(med_category)) |>
-  fmutate(event = if_else(med_category %in% c("milrinone", "dobutamine"), "inotrope", "vasopressor")) |>
+  fmutate(event = "vasopressor") |>
   select(joined_hosp_id, event_dttm = admin_dttm, event, med_category) |>
   funique()
-
-expected_events = c("inotrope", "vasopressor")
-present_events  = sort(funique(meds$event))
-missing_events  = setdiff(expected_events, present_events)
-
-if (length(missing_events) > 0) {
-  stop(
-    sprintf("Meds need at least one %s, but %s not found.",
-            if (length(missing_events) == 1) "event" else "events",
-            paste(missing_events, collapse = ", ")
-    ),
-    call. = FALSE
-  )
-}
-
-message("✅ meds contains both inotropes and vasopressors.")
 
 rm(va_list, expected_events, present_events, missing_events)
 gc()
@@ -701,7 +692,7 @@ gc()
 
 ### combine and save -----------------------------------------------------------
 
-rowbind(meds, resp, icu, or, fill = T) |> 
+rowbind(meds, resp, fill = T) |> 
   write_parquet(here("proj_tables", "careprocess.parquet"))
 
 ## cohort (1 row per encounter) ------------------------------------------------
@@ -719,20 +710,18 @@ imv_encs =
   tibble::deframe()
 
 cohort = 
-  join(cohort, cohort_demographics, how = "left", multiple = F) |>
-  fmutate(age        = if_else(age > 90, 90.9, age)) |>
-  fmutate(icu_01     = if_else(joined_hosp_id %in% icu_encs,    1L, 0L, 0L)) |>
-  fmutate(imv_01     = if_else(joined_hosp_id %in% imv_encs,    1L, 0L, 0L)) |>
-  fmutate(va_01      = if_else(joined_hosp_id %in% va_encs,     1L, 0L, 0L)) |>
+  cohort |>
+  fmutate(icu_01 = if_else(joined_hosp_id %in% icu_encs, 1L, 0L, 0L)) |>
+  fmutate(imv_01 = if_else(joined_hosp_id %in% imv_encs, 1L, 0L, 0L)) |>
+  fmutate(va_01  = if_else(joined_hosp_id %in% va_encs,  1L, 0L, 0L)) |>
   select(
     patient_id, 
     joined_hosp_id, 
     age, 
-    sex_category, 
     race_category, 
     ethnicity_category, 
     ends_with("01"),
-    discharge_category,
+    initial_code_status,
     los_hosp_d
   ) |>
   mutate(across(
@@ -744,7 +733,7 @@ cohort =
 
 props = 
   tidytable(
-    icu     = fmean(cohort$icu_01,    na.rm=TRUE),
+    icu     = fmean(cohort$icu_01,     na.rm=TRUE),
     dead    = fmean(cohort$dead_01,    na.rm=TRUE),
     hospice = fmean(cohort$hospice_01, na.rm=TRUE),
     imv     = fmean(cohort$imv_01,     na.rm=TRUE),
