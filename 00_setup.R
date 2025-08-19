@@ -150,10 +150,10 @@ if (!(file_type %in% allowed_files)) {
 
 ### pull time zone from site details -------------------------------------------
 
-site_time_zone = 
-  fsubset(site_details, site_name == site_lowercase) |>
-  select(tz) |>
-  tibble::deframe()
+# site_time_zone = 
+#   fsubset(site_details, site_name == site_lowercase) |>
+#   select(tz) |>
+#   tibble::deframe()
 
 ### file locations -------------------------------------------------------------
 
@@ -166,8 +166,8 @@ if (!dir.exists(paste0(project_location, "/proj_output"))) {
 
 ### dates ----------------------------------------------------------------------
 
-start_date = as.POSIXct("2016-01-01", tz = site_time_zone)
-end_date   = as.POSIXct("2024-12-31", tz = site_time_zone)
+start_date = as.POSIXct("2016-01-01", tz = "UTC") # could be site_time_zone if we care...
+end_date   = as.POSIXct("2024-12-31", tz = "UTC") # could be site_time_zone if we care...
 today      = format(Sys.Date(), "%y%m%d")
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
