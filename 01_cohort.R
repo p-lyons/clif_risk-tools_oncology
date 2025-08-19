@@ -129,8 +129,8 @@ cohort_data =
   dplyr::collect()
 
 hid_dups_source =
-  count(cohort_data, hospitalization_id) |>
-  fsubset(n > 1) 
+  fcount(cohort_data, hospitalization_id) |>
+  fsubset(N > 1) 
 
 if (nrow(hid_dups_source) > 0) {
   stop(
@@ -308,8 +308,8 @@ dx =
   join(dx, hid_jid_crosswalk, how = "left", multiple = F) |>
   select(patient_id, start_date, diagnosis_code, liquid_01, rank) |>
   join(cohort, how = "inner", multiple = T) |>
-  fsubset(start_date >= admission_dttm - dyears(1)) |>
-  fsubset(start_date <= admission_dttm + ddays(1)) 
+  fsubset(start_date >= admission_dttm - lubridate::dyears(1)) |>
+  fsubset(start_date <= admission_dttm + lubridate::ddays(1)) 
 
 dx_year = 
   roworder(dx, rank, -start_date) |>
@@ -322,7 +322,7 @@ dx_year =
 ### sensitivity analysis: cancer dx associated with encounter only -------------
 
 dx_enc = 
-  fsubset(dx, start_date >= admission_dttm-ddays(1)) |>
+  fsubset(dx, start_date >= admission_dttm - lubridate::ddays(1)) |>
   roworder(rank, -start_date) |>
   fgroup_by(joined_hosp_id) |>
   fsummarize(
@@ -430,14 +430,14 @@ ward_times =
 
 vmax = 
   join(vmax, ward_times, how = "inner", multiple = F) |>
-  fsubset(vtime < first_ward_dttm + dhours(6)) |>
+  fsubset(vtime < first_ward_dttm + lubridate::dhours(6)) |>
   select(joined_hosp_id) |>
   tibble::deframe()
 
 ### apply exclusion to cohort --------------------------------------------------
 
 cohort       = fsubset(cohort, !joined_hosp_id %in% vmax)
-cohort       = fsubset(cohort, discharge_dttm >= admission_dttm + dhours(6))
+cohort       = fsubset(cohort, discharge_dttm >= admission_dttm + lubridate::dhours(6))
 cohort_pats  = funique(cohort$patient_id)
 cohort_jids  = funique(cohort$joined_hosp_id)
 cohort_hids  = funique(hid_jid_crosswalk$hospitalization_id)
@@ -473,14 +473,14 @@ icu =
 
 icu = 
   join(icu, cohort, how = "inner", multiple = F) |>
-  fsubset(itime < first_ward_dttm + dhours(6)) |>
+  fsubset(itime < first_ward_dttm + lubridate::dhours(6)) |>
   select(joined_hosp_id) |>
   tibble::deframe()
 
 ### apply exclusion to cohort --------------------------------------------------
 
 cohort       = fsubset(cohort, !joined_hosp_id %in% icu)
-cohort       = fsubset(cohort, discharge_dttm >= first_ward_dttm + dhours(6))
+cohort       = fsubset(cohort, discharge_dttm >= first_ward_dttm + lubridate::dhours(6))
 cohort_pats  = funique(cohort$patient_id)
 cohort_jids  = funique(cohort$joined_hosp_id)
 cohort_hids  = funique(hid_jid_crosswalk$hospitalization_id)
@@ -668,6 +668,11 @@ df_outcomes =
 
 fwrite(df_outcomes, here("proj_tables", "outcome_times.csv"))
 
+ward_icu_tx = 
+  fsubset(df_outcomes, outcome_cat == "icu") |>
+  select(joined_hosp_id) |>
+  tibble::deframe()
+
 rm(df_outcomes, death, hospice, icu); gc()
 
 # other care processes --------------------------------------------------------#
@@ -699,8 +704,7 @@ meds =
   select(joined_hosp_id, event_dttm = admin_dttm, event, med_category) |>
   funique()
 
-rm(va_list, expected_events, present_events, missing_events)
-gc()
+rm(va_list); gc()
 
 ### respiratory support --------------------------------------------------------
 
@@ -764,9 +768,10 @@ imv_encs =
 
 cohort = 
   funique(cohort) |>
-  fmutate(icu_01 = if_else(joined_hosp_id %in% icu_encs, 1L, 0L, 0L)) |>
-  fmutate(imv_01 = if_else(joined_hosp_id %in% imv_encs, 1L, 0L, 0L)) |>
-  fmutate(va_01  = if_else(joined_hosp_id %in% va_encs,  1L, 0L, 0L)) |>
+  fmutate(wicu_01 = if_else(joined_hosp_id %in% ward_icu_tx, 1L, 0L, 0L)) |>
+  fmutate(icu_01  = if_else(joined_hosp_id %in% icu_encs,    1L, 0L, 0L)) |>
+  fmutate(imv_01  = if_else(joined_hosp_id %in% imv_encs,    1L, 0L, 0L)) |>
+  fmutate(va_01   = if_else(joined_hosp_id %in% va_encs,     1L, 0L, 0L)) |>
   select(
     patient_id, 
     joined_hosp_id, 
@@ -811,5 +816,5 @@ if (
 
 write_parquet(cohort, here("proj_tables", "cohort.parquet"))
 
-rm(meds, resp, icu, icu_encs, va_encs, imv_encs, props)
+rm(meds, resp, icu_encs, ward_icu_tx, va_encs, imv_encs, props)
 gc()
