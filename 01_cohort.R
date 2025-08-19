@@ -338,7 +338,7 @@ dx =
   ungroup() 
 
 dx = 
-  roworder(dx, rank) |>
+  roworder(dx, rank, -start_date, diagnosis_code) |>  
   fgroup_by(hospitalization_id) |>
   fsummarize(
     start_date     = ffirst(start_date),
@@ -357,7 +357,7 @@ dx =
   fsubset(start_date <= admission_dttm + lubridate::ddays(1)) 
 
 dx_year = 
-  roworder(dx, rank, -start_date) |>
+  roworder(dx, rank, -start_date, diagnosis_code) |>
   fgroup_by(joined_hosp_id) |>
   fsummarize(
     ca_icd10_1y  = ffirst(diagnosis_code),
@@ -368,7 +368,7 @@ dx_year =
 
 dx_enc = 
   fsubset(dx, start_date >= admission_dttm - lubridate::ddays(1)) |>
-  roworder(rank, -start_date) |>
+  roworder(rank, -start_date, diagnosis_code) |>
   fgroup_by(joined_hosp_id) |>
   fsummarize(
     ca_icd10_enc  = ffirst(diagnosis_code),
@@ -454,6 +454,8 @@ rm(icu_before_wards, ed_admits, first_ed_jids); gc()
 
 ### find the last vital sign measurement time in each encounter ----------------
 
+min_ward_hours = 6L
+
 vmax = 
   dplyr::filter(data_list$vitals, hospitalization_id %in% cohort_hids) |>
   dplyr::filter(vital_category %in% req_vitals) |>
@@ -476,14 +478,14 @@ first_ward =
 
 vmax = 
   join(vmax, first_ward, how = "inner", multiple = F) |>
-  fsubset(vtime < first_ward_dttm + lubridate::dhours(6)) |>
+  fsubset(vtime < first_ward_dttm + lubridate::dhours(min_ward_hours)) |>
   select(joined_hosp_id) |>
   tibble::deframe()
 
 ### apply exclusion to cohort --------------------------------------------------
 
 cohort       = fsubset(cohort, !joined_hosp_id %in% vmax)
-cohort       = fsubset(cohort, discharge_dttm >= admission_dttm + lubridate::dhours(6))
+cohort       = fsubset(cohort, discharge_dttm >= admission_dttm + lubridate::dhours(min_ward_hours))
 cohort_pats  = funique(cohort$patient_id)
 cohort_jids  = funique(cohort$joined_hosp_id)
 cohort_hids  = funique(hid_jid_crosswalk$hospitalization_id)
@@ -526,7 +528,7 @@ icu =
 ### apply exclusion to cohort --------------------------------------------------
 
 cohort       = fsubset(cohort, !joined_hosp_id %in% icu)
-cohort       = fsubset(cohort, discharge_dttm >= first_ward_dttm + lubridate::dhours(6))
+cohort       = fsubset(cohort, discharge_dttm >= first_ward_dttm + lubridate::dhours(min_ward_hours))
 cohort_pats  = funique(cohort$patient_id)
 cohort_jids  = funique(cohort$joined_hosp_id)
 cohort_hids  = funique(hid_jid_crosswalk$hospitalization_id)
@@ -866,7 +868,6 @@ write_parquet(hid_jid_crosswalk, here("proj_tables", "hid_jid_crosswalk.parquet"
 keep = c(
   "data_list",
   "site_lowercase",
-  "site_time_zone",
   "cohort",
   "cohort_hids",
   "cohort_jids",
