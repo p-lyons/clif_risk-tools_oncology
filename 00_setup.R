@@ -14,7 +14,7 @@ packages_to_install =
     "tidytable",
     "collapse",
     "janitor",
-    "readxl"
+    "readxl",
     "arrow",
     "rvest", 
     "readr", 
