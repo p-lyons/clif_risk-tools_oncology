@@ -18,16 +18,19 @@ packages_to_install =
     "readr", 
     "yaml",
     "here",
-    "fst"
+    "fst",
+    "ps"
   )
 
 packages_to_load = 
   c(
+    "data.table",
     "tidytable",
     "collapse",
     "stringr",
     "arrow",
-    "here"
+    "here",
+    "ps"
   )
 
 fn_install_if_mi = function(p) {
@@ -46,6 +49,64 @@ options(dplyr.summarise.inform = FALSE)
 rm(packages_to_install, packages_to_load, fn_install_if_mi, fn_load_quiet); gc()
 
 ## environment -----------------------------------------------------------------
+
+### threads and ram ------------------------------------------------------------
+
+os_type   = Sys.info()[["sysname"]]
+all_cores = parallel::detectCores(logical = TRUE)
+all_cores = if (is.na(all_cores)) 1L else as.integer(all_cores)
+
+get_ram_gb = function() {
+  tryCatch({
+    if (os_type == "Darwin") {
+      # macOS: sysctl reports total RAM in bytes
+      bytes = suppressWarnings(
+        as.numeric(system("sysctl -n hw.memsize", intern = TRUE))
+      )
+      if (length(bytes) > 0 && !is.na(bytes)) bytes / 1024^3 else NA_real_
+    } else {
+      # Windows & Linux: ps is usually reliable
+      val = ps::ps_system_memory()[["available"]] / 1024^3
+      if (is.finite(val)) val else {
+        # Linux fallback: read /proc/meminfo directly
+        if (file.exists("/proc/meminfo")) {
+          kb = suppressWarnings(
+            as.numeric(system("awk '/MemAvailable/ {print $2}' /proc/meminfo", intern = TRUE))
+          )
+          if (length(kb) > 0 && !is.na(kb)) kb / 1024^2 else NA_real_
+        } else {
+          NA_real_
+        }
+      }
+    }
+  }, error = function(e) NA_real_)
+}
+
+avail_ram_gb = get_ram_gb()
+
+## choose threads conservatively (00 is light; keep headroom) ------------------
+
+reserve_cores   = 1L
+gb_per_thread   = 0.50
+max_by_cores    = max(1L, all_cores - reserve_cores)
+max_by_memory   = if (is.finite(avail_ram_gb)) max(1L, floor(avail_ram_gb / gb_per_thread)) else max_by_cores
+n_threads       = as.integer(max(1L, min(max_by_cores, max_by_memory, 8L)))
+n_math_threads  = as.integer(max(1L, min(n_threads, 8L)))
+
+## apply thread settings -------------------------------------------------------
+
+data.table::setDTthreads(threads = n_threads)
+collapse::set_collapse(nthreads  = n_threads)
+options(arrow.use_threads        = TRUE)
+Sys.setenv(ARROW_NUM_THREADS     = n_threads)
+options(mc.cores                 = n_threads)
+
+# concise summary
+message(
+  sprintf("Env OK | OS=%s | Cores=%d | Threads=%d | MathThreads=%d | Avail RAM≈%s GB",
+          os_type, all_cores, n_threads, n_math_threads,
+          ifelse(is.finite(avail_ram_gb), round(avail_ram_gb, 1), "NA"))
+)
 
 ### site details ---------------------------------------------------------------
 
