@@ -305,7 +305,7 @@ dx =
   dplyr::select(hospitalization_id, start_date, diagnosis_code) |>
   dplyr::collect() |>
   funique()
- 
+
 ### assign hierarchy to diagnoses ----------------------------------------------
 
 diagnosis_priority = tribble(
@@ -397,7 +397,7 @@ ed_admits =
   dplyr::collect() |>
   funique() |>
   tibble::deframe()
-                
+
 first_ed_jids = 
   fsubset(hid_jid_crosswalk, hospitalization_id %in% ed_admits) |>
   select(joined_hosp_id) |>
@@ -420,7 +420,8 @@ fig_s01_02no = fsubset(cohort, ca_01 == 0) |> select(joined_hosp_id) |> fnunique
 icu_before_wards = 
   dplyr::filter(data_list$adt, hospitalization_id %in% cohort_hids) |>
   dplyr::filter(tolower(location_category) %in% c("icu", "ward")) |>
-  dplyr::collect()
+  dplyr::collect() |>
+  fmutate(location_category = tolower(location_category))
 
 icu_before_wards = 
   join(icu_before_wards, hid_jid_crosswalk, how = "inner", multiple = T) |>
@@ -468,13 +469,13 @@ vmax =
 
 ### is the last vital time within 6h of first ward time? -----------------------
 
-ward_times = 
+first_ward = 
   roworder(ward_times, in_dttm) |>
   fgroup_by(joined_hosp_id) |>
   fsummarize(first_ward_dttm = ffirst(in_dttm))
 
 vmax = 
-  join(vmax, ward_times, how = "inner", multiple = F) |>
+  join(vmax, first_ward, how = "inner", multiple = F) |>
   fsubset(vtime < first_ward_dttm + lubridate::dhours(6)) |>
   select(joined_hosp_id) |>
   tibble::deframe()
@@ -494,7 +495,7 @@ rm(vmax); gc()
 
 ## time starts at the first ward moment ----------------------------------------
 
-cohort = join(cohort, ward_times, how = "left", multiple = F)
+cohort = join(cohort, first_ward, how = "left", multiple = F)
 
 ## enforce no outcomes before first score --------------------------------------
 
@@ -507,7 +508,7 @@ icu =
   dplyr::filter(tolower(location_category) == "icu") |>
   dplyr::select(hospitalization_id, in_dttm) |>
   dplyr::collect()
-  
+
 icu = 
   join(icu, hid_jid_crosswalk, how = "inner", multiple = T) |>
   roworder(in_dttm) |>
@@ -859,7 +860,8 @@ if (
   stop("Sanity check failed: Outcome distribution out of expected range.")
 }
 
-write_parquet(cohort, here("proj_tables", "cohort.parquet"))
+write_parquet(cohort,            here("proj_tables", "cohort.parquet"))
+write_parquet(hid_jid_crosswalk, here("proj_tables", "hid_jid_crosswalk.parquet"))
 
 keep = c(
   "data_list",
