@@ -13,6 +13,8 @@ packages_to_install =
     "tidyverse",
     "tidytable",
     "collapse",
+    "janitor",
+    "readxl"
     "arrow",
     "rvest", 
     "readr", 
