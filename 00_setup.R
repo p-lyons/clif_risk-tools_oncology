@@ -177,6 +177,8 @@ names(data_list) = names(required_filenames)
 
 validate_table = function(tbl, table_name, req_vars = NULL, req_values = list()) {
   
+  if (is.null(req_vars)) req_vars = character(0)
+  
   problems     = character()
   missing_vars = setdiff(req_vars, names(tbl))
   
@@ -192,8 +194,7 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
     
     ### special handling for FileSystemDataset
     if (inherits(tbl, "FileSystemDataset")) {
-      # message(sprintf("  • Extracting from FileSystemDataset: '%s'", var))
-      
+
       tryCatch({
         value_counts =
           dplyr::select(tbl, !!rlang::sym(var)) |>
@@ -204,13 +205,8 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
         
         if (nrow(value_counts) > 0) {
           present_vals = na.omit(as.character(value_counts[[var]]))
-          message(sprintf("    Found %d unique values", length(present_vals)))
-        } else {
-          present_vals = character(0)
-          message("    No values found, dataset may be empty")
         }
       }, error = function(e) {
-        message(sprintf("    Error extracting values: %s", e$message))
         present_vals = character(0)
       })
       
@@ -224,11 +220,8 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
           
           if (nrow(sample_data) > 0) {
             present_vals = na.omit(unique(as.character(sample_data[[var]])))
-            message(sprintf("    Found %d values by scanning first rows", length(present_vals)))
           }
-        }, error = function(e) {
-          message(sprintf("    Scan approach failed: %s", e$message))
-        })
+        }, error = function(e) { })
       }
     } else if (!is.data.frame(tbl) && inherits(tbl, "Table")) {
       
@@ -242,29 +235,18 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
         
         if (nrow(distinct_vals) > 0) {
           present_vals = na.omit(as.character(distinct_vals[[var]]))
-          message(sprintf("    Found %d distinct values", length(present_vals)))
-        } else {
-          present_vals = character(0)
         }
       }, error = function(e) {
-        message(sprintf("    Error extracting values: %s", e$message))
         present_vals = character(0)
       })
+      
     } else {
       present_vals = na.omit(unique(as.character(tbl[[var]])))
-      message(sprintf("  • Extracted from data.frame: %d values for '%s'", length(present_vals), var))
     }
     
     present_vals  = tolower(trimws(as.character(present_vals)))
     expected_vals = unique(tolower(trimws(req_values[[var]])))
     missing_vals  = setdiff(expected_vals, present_vals)
-    
-    message(sprintf(
-      "  • [%s] '%s' has values: %s", table_name, var,
-      if (length(present_vals)) paste(sort(present_vals), collapse = ", ")
-      else "<NONE>"
-    ))
-    message(sprintf("    expecting: %s", paste(sort(expected_vals), collapse = ", ")))
     
     if (length(missing_vals)) {
       problems = c(
