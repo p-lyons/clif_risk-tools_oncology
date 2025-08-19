@@ -227,9 +227,7 @@ if (nrow(post_death_admissions) > 0) {
 message("✅ Cleaned duplicate deaths and post-death encounters.")
 
 rm(dupes, dup_deaths, death_times, post_death_admissions, start_date, end_date)
-rm(clif_table_basenames, clif_table_filenames, eligible_joined_ids, encdrop)
-rm(file_type, n_dupes, n_pats, table_file_map)
-gc()
+rm(encdrop, file_type, n_dupes, n_pats); gc()
 
 cohort_pats = funique(cohort$patient_id)
 cohort_jids = funique(cohort$joined_hosp_id)
@@ -816,5 +814,17 @@ if (
 
 write_parquet(cohort, here("proj_tables", "cohort.parquet"))
 
-rm(meds, resp, icu_encs, ward_icu_tx, va_encs, imv_encs, props)
-gc()
+keep = c(
+  "data_list",
+  "site_lowercase",
+  "site_time_zone",
+  "cohort",
+  "cohort_hids",
+  "cohort_jids",
+  "cohort_pats",
+  "hid_jid_crosswalk",
+  "ward_times"
+)
+
+rm(list = setdiff(ls(), keep)); gc()
+
