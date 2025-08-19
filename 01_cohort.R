@@ -571,7 +571,8 @@ codes =
   fsubset(start_dttm <= discharge_dttm) |>
   roworder(start_dttm) |>
   fgroup_by(joined_hosp_id) |>
-  fsummarize(initial_code_status = ffirst(code_status_category))
+  fsummarize(initial_code_status = ffirst(code_status_category)) |>
+  fmutate(initial_code_status = if_else(initial_code_status == "DNR", "Special/Partial", initial_code_status))
 
 cohort = join(cohort, codes, how = "left", multiple = F)
 
