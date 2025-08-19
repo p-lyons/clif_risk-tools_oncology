@@ -1,5 +1,9 @@
+# labs and vitals script for CLIF project validating risk tools in oncology.
+# Requires 01_* to be complete (expects cohort + hid_jid_crosswalk in memory or on disk)
 
-# ====================== Params ================================================
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# parameters -------------------------------------------------------------------
 
 cats             = c("heart_rate","respiratory_rate","sbp","dbp","temp_c","spo2")
 union_round_min  = 15L      # set NULL to skip rounding
@@ -12,10 +16,36 @@ tz_use           = "UTC"
 fio2_units       = "auto"   # "auto" | "fraction" | "percent"
 out_parquet      = "scores_ews.parquet"
 
-# ====================== Vitals: pull, coerce, de-outlier ======================
+# optional: load crosswalk if not present --------------------------------------
 
-vs = 
-  dplyr::filter(data_list$vitals, vital_category %in% cats) |>
+if (!exists("hid_jid_crosswalk")) {
+  cw_path = here("proj_tables", "hid_jid_crosswalk.parquet")
+  if (file.exists(cw_path)) hid_jid_crosswalk = arrow::read_parquet(cw_path)
+}
+if (!exists("hid_jid_crosswalk"))
+  stop("hid_jid_crosswalk is required (hospitalization_id -> joined_hosp_id). Run 01_* or load crosswalk.", call. = FALSE)
+
+cohort_hids = funique(hid_jid_crosswalk$hospitalization_id)
+
+# ward intervals and first-ward times ------------------------------------------
+
+ward_times =
+  dplyr::filter(data_list$adt, tolower(location_category) %in% c("ward")) |>
+  dplyr::filter(hospitalization_id %in% cohort_hids) |>
+  dplyr::select(hospitalization_id, in_dttm, out_dttm) |>
+  dplyr::collect() |>
+  funique()
+
+first_ward =
+  roworder(ward_times, in_dttm) |>
+  fgroup_by(hospitalization_id) |>
+  fsummarize(first_ward_dttm = ffirst(in_dttm))
+
+# ====================== Vitals: ward-only, coerce, de-outlier =================
+
+vs =
+  dplyr::filter(data_list$vitals, hospitalization_id %in% cohort_hids) |>
+  dplyr::filter(vital_category %in% cats) |>
   dplyr::select(hospitalization_id, recorded_dttm, vital_category, vital_value) |>
   dplyr::collect()
 
@@ -24,6 +54,27 @@ vs[, `:=`(
   recorded_dttm = as.POSIXct(recorded_dttm, tz = tz_use),
   vital_value   = suppressWarnings(as.numeric(vital_value))
 )]
+
+# keep vitals strictly within ward intervals and from first ward onward --------
+
+setDT(ward_times)
+ward_times[, `:=`(
+  in_dttm  = as.POSIXct(in_dttm,  tz = tz_use),
+  out_dttm = as.POSIXct(out_dttm, tz = tz_use)
+)]
+setDT(first_ward)
+first_ward[, first_ward_dttm := as.POSIXct(first_ward_dttm, tz = tz_use)]
+
+# within ward intervals
+vs = ward_times[vs, on = .(hospitalization_id), nomatch = 0L][
+  recorded_dttm >= in_dttm & (is.na(out_dttm) | recorded_dttm <= out_dttm),
+  .(hospitalization_id, recorded_dttm, vital_category, vital_value)
+]
+# from first ward time
+vs = first_ward[vs, on = .(hospitalization_id), nomatch = 0L][
+  recorded_dttm >= first_ward_dttm,
+  .(hospitalization_id, recorded_dttm, vital_category, vital_value)
+]
 
 # Drop implausible values BEFORE LOCF
 vs[vital_category == "heart_rate",       vital_value := fifelse(vital_value < 20 | vital_value > 250, NA_real_, vital_value)]
@@ -48,7 +99,7 @@ setkey(grid, hospitalization_id, recorded_dttm)
 # ====================== Roll each vital once ==================================
 
 cat_map = c(heart_rate="hr", respiratory_rate="rr", sbp="sbp",
-             dbp="dbp", temp_c="temp_c", spo2="spo2")
+            dbp="dbp", temp_c="temp_c", spo2="spo2")
 
 for (c_in in names(cat_map)) {
   c_out = cat_map[[c_in]]
@@ -90,7 +141,7 @@ DT[, `:=`(
   mews_temp_i = fcase(is.na(temp_c), NA_integer_,
                       temp_c <= 35, 2L, temp_c < 38.5, 0L, default = 1L),
   
-  # NEWS2 (Scale 1 SpO2)
+  # NEWS2 (Scale 1 SpO2) + O2 added later
   news_rr_i   = fcase(is.na(rr), NA_integer_,
                       rr <= 8, 3L, rr <= 11, 1L, rr <= 20, 0L, rr <= 24, 2L, default = 3L),
   news_spo2_i = fcase(is.na(spo2), NA_integer_,
@@ -107,17 +158,18 @@ DT[, `:=`(
   sirs_hr_i   = as.integer(!is.na(hr)     & hr > 90),
   sirs_rr_i   = as.integer(!is.na(rr)     & rr >= 20),
   
-  # Placeholders until you attach mentation
+  # Placeholders until mentation attached
   qsofa_ment_i = NA_integer_,
   mews_avpu_i  = NA_integer_,
   news_conf_i  = NA_integer_
 )]
 
-# ====================== Respiratory support (FiO2/flow) =======================
+# ====================== Respiratory support (FiO2/flow), ward-only ============
 
 rs = data_list$respiratory_support |>
-  select(hospitalization_id, recorded_dttm, lpm_set, fio2_set) |>
-  collect()
+  dplyr::filter(hospitalization_id %in% cohort_hids) |>
+  dplyr::select(hospitalization_id, recorded_dttm, lpm_set, fio2_set) |>
+  dplyr::collect()
 setDT(rs)
 
 if (nrow(rs)) {
@@ -126,7 +178,15 @@ if (nrow(rs)) {
     lpm_set  = suppressWarnings(as.numeric(lpm_set)),
     fio2_set = suppressWarnings(as.numeric(fio2_set))
   )]
-  rs[, lpm_set := fifelse(lpm_set < 0 | lpm_set > 200, NA_real_, lpm_set)]
+  # trim to ward intervals and from first ward onward
+  rs = ward_times[rs, on = .(hospitalization_id), nomatch = 0L][
+    recorded_dttm >= in_dttm & (is.na(out_dttm) | recorded_dttm <= out_dttm),
+    .(hospitalization_id, recorded_dttm, lpm_set, fio2_set)
+  ]
+  rs = first_ward[rs, on = .(hospitalization_id), nomatch = 0L][
+    recorded_dttm >= first_ward_dttm,
+    .(hospitalization_id, recorded_dttm, lpm_set, fio2_set)
+  ]
   setkey(rs, hospitalization_id, recorded_dttm)
   
   rj = rs[DT, on = .(hospitalization_id, recorded_dttm), roll = TRUE]
@@ -155,24 +215,34 @@ mews_sf_pts = rep(NA_integer_, nrow(DT))
 ok = !is.na(DT$sf_ratio)
 if (any(ok)) {
   bins = cut(DT$sf_ratio[ok], breaks = c(-Inf, 235, 315, Inf),
-              right = TRUE, include.lowest = TRUE, labels = FALSE)
+             right = TRUE, include_lowest = TRUE, labels = FALSE)
   mews_sf_pts[ok] = c(3L, 2L, 0L)[bins]
 }
 DT[, mews_sf_i := mews_sf_pts]
 rm(mews_sf_pts, ok, bins); gc()
 
-# ====================== Labs: WBC, Bands, PaCO2 ===============================
+# ====================== Labs: WBC, Bands, PaCO2 (ward-only) ===================
 
 labs = data_list$labs |>
-  select(hospitalization_id, lab_result_dttm, lab_category, lab_value_numeric) |>
-  collect()
+  dplyr::filter(hospitalization_id %in% cohort_hids) |>
+  dplyr::select(hospitalization_id, lab_result_dttm, lab_category, lab_value_numeric) |>
+  dplyr::collect()
 setDT(labs)
 
 if (nrow(labs)) {
   labs[, `:=`(
-    lab_result_dttm  = as.POSIXct(lab_result_dttm, tz = tz_use),
+    lab_result_dttm   = as.POSIXct(lab_result_dttm, tz = tz_use),
     lab_value_numeric = suppressWarnings(as.numeric(lab_value_numeric))
   )]
+  # trim to ward intervals and from first ward onward
+  labs = ward_times[labs, on = .(hospitalization_id), nomatch = 0L][
+    lab_result_dttm >= in_dttm & (is.na(out_dttm) | lab_result_dttm <= out_dttm),
+    .(hospitalization_id, lab_result_dttm, lab_category, lab_value_numeric)
+  ]
+  labs = first_ward[labs, on = .(hospitalization_id), nomatch = 0L][
+    lab_result_dttm >= first_ward_dttm,
+    .(hospitalization_id, lab_result_dttm, lab_category, lab_value_numeric)
+  ]
   
   # WBC
   wbc_tbl = labs[lab_category == "wbc"]
@@ -222,9 +292,15 @@ rsum_or_na(DT, c("news_rr_i","news_spo2_i","news_temp_i","news_sbp_i","news_hr_i
 rsum_or_na(DT, c("sirs_temp_i","sirs_hr_i","sirs_rr_i","sirs_wbc_i","sirs_bands_i","sirs_paco2_i"), "sirs")
 rsum_or_na(DT, c("mews_rr_i","mews_hr_i","mews_sbp_i","mews_temp_i","mews_avpu_i","mews_sf_i"), "mews_sf_total")
 
-# ====================== Write Parquet =========================================
+# ====================== Attach joined_hosp_id and write =======================
 
-# Keep integer columns as integers (Arrow will store them efficiently)
+setDT(hid_jid_crosswalk)
+hid_jid_crosswalk = unique(hid_jid_crosswalk[, .(hospitalization_id, joined_hosp_id)])
+DT = hid_jid_crosswalk[DT, on = .(hospitalization_id), nomatch = 0L]
+setcolorder(DT, c("joined_hosp_id","hospitalization_id","recorded_dttm"))
+
 write_parquet(DT, out_parquet)
-cat("Wrote:", out_parquet, "rows:", nrow(DT), "encounters:", length(unique(DT$hospitalization_id)), "\n")
+cat("Wrote:", out_parquet,
+    "rows:", nrow(DT),
+    "encounters:", length(unique(DT$joined_hosp_id)), "\n")
 DT[]
