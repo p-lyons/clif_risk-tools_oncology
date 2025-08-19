@@ -30,18 +30,20 @@ packages_to_load =
     "here"
   )
 
-fn_install_if_mi = function(package) {
-  if (!require(package, character.only = T)) {install.packages(package, dependencies = T)}
+fn_install_if_mi = function(p) {
+  if (!requireNamespace(p, quietly = TRUE)) {
+    try(install.packages(p, dependencies = TRUE), silent = TRUE)
+  }
 }
 
-fn_load = function(package) {
-  library(package, character.only = TRUE)
+fn_load_quiet = function(p) {
+  suppressPackageStartupMessages(library(p, character.only = TRUE))
 }
 
-sapply(packages_to_install, fn_install_if_mi)
-sapply(packages_to_load, fn_load)
-rm(packages_to_install, packages_to_load, fn_install_if_mi, fn_load)
-gc()
+invisible(lapply(packages_to_install, fn_install_if_mi))
+invisible(lapply(packages_to_load,   fn_load_quiet))
+options(dplyr.summarise.inform = FALSE)
+rm(packages_to_install, packages_to_load, fn_install_if_mi, fn_load_quiet); gc()
 
 ## environment -----------------------------------------------------------------
 
@@ -64,10 +66,9 @@ project_location = config$project_location
 if (!(site_lowercase %in% allowed_sites)) {
   stop(
     paste0(
-      "Invalid '", 
-      site_lowercase,
+      "Invalid '", site_lowercase,
       "'. Expected one of: ", 
-      paste(allowed_sites, collapse = ", ")
+      paste(allowed_sites, collapse = ", "), call. = F
     )
   )
 }
@@ -77,10 +78,9 @@ if (!(site_lowercase %in% allowed_sites)) {
 if (!(file_type %in% allowed_files)) {
   stop(
     paste0(
-      "Invalid '", 
-      file_type,
+      "Invalid '", file_type,
       "'. Expected one of: ", 
-      paste(allowed_file_types, collapse = ", ")
+      paste(allowed_files, collapse = ", "), call. = FALSE
     )
   )
 }
@@ -151,8 +151,7 @@ if (length(missing_tables) > 0) {
   message("All required tables are present.")
 }
 
-rm(site_details, allowed_files, allowed_sites, missing_tables)
-gc()
+rm(site_details, allowed_files, allowed_sites, missing_tables); gc()
 
 ## load tables -----------------------------------------------------------------
 
@@ -171,6 +170,9 @@ if (file_type == "parquet") {
 
 names(data_list) = names(required_filenames)
 
+## validate table contents -----------------------------------------------------
+
+### function to validate a table -----------------------------------------------
 ## validate table contents -----------------------------------------------------
 
 ### function to validate a table -----------------------------------------------
@@ -194,7 +196,7 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
     
     ### special handling for FileSystemDataset
     if (inherits(tbl, "FileSystemDataset")) {
-
+      present_vals = character(0)
       tryCatch({
         value_counts =
           dplyr::select(tbl, !!rlang::sym(var)) |>
@@ -202,44 +204,33 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
           dplyr::summarize(n = dplyr::n()) |>
           dplyr::arrange(dplyr::desc(n)) |>
           dplyr::collect()
-        
         if (nrow(value_counts) > 0) {
           present_vals = na.omit(as.character(value_counts[[var]]))
         }
-      }, error = function(e) {
-        present_vals = character(0)
-      })
+      }, error = function(e) { })
       
-      ### last resort for FileSystemDatasets if counting fails - scan the first N rows
       if (length(present_vals) == 0) {
         tryCatch({
           sample_data =
             dplyr::select(tbl, !!rlang::sym(var)) |>
             utils::head(1000) |>
             dplyr::collect()
-          
           if (nrow(sample_data) > 0) {
             present_vals = na.omit(unique(as.character(sample_data[[var]])))
           }
         }, error = function(e) { })
       }
     } else if (!is.data.frame(tbl) && inherits(tbl, "Table")) {
-      
-      message(sprintf("  • Extracting from Arrow Table: '%s'", var))
-      
+      present_vals = character(0)
       tryCatch({
         distinct_vals = tbl |>
           dplyr::select(!!rlang::sym(var)) |>
           dplyr::distinct() |>
           dplyr::collect()
-        
         if (nrow(distinct_vals) > 0) {
           present_vals = na.omit(as.character(distinct_vals[[var]]))
         }
-      }, error = function(e) {
-        present_vals = character(0)
-      })
-      
+      }, error = function(e) { })
     } else {
       present_vals = na.omit(unique(as.character(tbl[[var]])))
     }
@@ -268,13 +259,6 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
 validate_all_tables = function(data_list, validation_specs) {
   all_problems = character()
   
-  message("Data list contents:")
-  for (name in names(data_list)) {
-    obj       = data_list[[name]]
-    obj_class = paste(class(obj), collapse = ", ")
-    message(sprintf("  • '%s': class=%s", name, obj_class))
-  }
-  
   for (spec in validation_specs) {
     tbl_name = spec$table_name
     if (!tbl_name %in% names(data_list)) {
@@ -283,16 +267,6 @@ validate_all_tables = function(data_list, validation_specs) {
     }
     
     tbl = data_list[[tbl_name]]
-    
-    message(sprintf("\nValidating table '%s'", tbl_name))
-    
-    if (inherits(tbl, "FileSystemDataset")) {
-      tryCatch({
-        message(sprintf("  Schema fields: %s", paste(names(tbl$schema), collapse=", ")))
-      }, error = function(e) {
-        message(sprintf("  Error reading schema: %s", e$message))
-      })
-    }
     
     tbl_problems = 
       validate_table(
@@ -306,9 +280,10 @@ validate_all_tables = function(data_list, validation_specs) {
   }
   
   if (length(all_problems)) {
-    stop("Validation errors found:\n", paste(all_problems, collapse = "\n\n"), call. = F)
+    stop("Validation errors found:\n", paste(all_problems, collapse = "\n\n"), call. = FALSE)
   }
-  message("✅ All validations passed.")
+  
+  message("✅ Validation passed: all required tables are present and contain needed values.")
 }
 
 ### list the details of each table's required elements -------------------------
@@ -410,9 +385,8 @@ validation_specs = list(patient_list, hosp_list, adt_list, med_list, resp_list, 
 
 validate_all_tables(data_list, validation_specs)
 
-rm(labs_list, vitals_list, resp_list, med_list, adt_list, hosp_list, patient_list)
-rm(validation_specs, clif_table_basenames, clif_table_filenames, required_filenames)
-rm(required_tables, table_file_map, validate_all_tables, validate_table)
+rm(labs_list, vitals_list, resp_list, med_list, adt_list, hosp_list, patient_list, validation_specs)
+rm(clif_table_basenames, clif_table_filenames, required_filenames, required_tables, table_file_map)
 gc()
 
 # go to script 01
