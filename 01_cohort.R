@@ -318,7 +318,7 @@ diagnosis_priority = tribble(
 )
 
 dx = 
-  rowwise(dx) %>%
+  rowwise(dx) |>
   mutate(
     diag_group = diagnosis_priority$group[
       which.min(if_else(
@@ -334,7 +334,7 @@ dx =
         Inf
       ))
     ]
-  ) %>%
+  ) |>
   ungroup() 
 
 dx = 
