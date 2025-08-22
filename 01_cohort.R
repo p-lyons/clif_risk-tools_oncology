@@ -970,7 +970,9 @@ keep = c(
   "cohort_jids",
   "cohort_pats",
   "hid_jid_crosswalk",
-  "ward_times"
+  "ward_times",
+  "req_vitals",
+  "req_labs"
 )
 
 rm(list = setdiff(ls(), keep)); gc()
