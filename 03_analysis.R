@@ -6,11 +6,11 @@
 ## function to write files -----------------------------------------------------
 
 .allowed <- list(
-  main       = c("auc","cm"),
-  threshold  = c("ever","first","cm","comps","leadtime"),
-  sensitivity= c("auc","cm","ever","first","comps","leadtime"),
-  subgroups  = c("auc","cm","counts"),
-  horizon    = c("auc","cm","counts")
+  main        = c("auc","cm"),
+  threshold   = c("ever","first","cm","comps","leadtime"),
+  sensitivity = c("auc","cm","ever","first","comps","leadtime"),
+  subgroups   = c("auc","cm","counts"),
+  horizon     = c("auc","cm","counts")
 )
 
 # filename: {artifact}{_strata?}{_h{hrs}?}{-variant?}-{site}.csv
@@ -31,13 +31,11 @@ write_artifact <- function(df, analysis, artifact, site,
             artifact %in% .allowed[[analysis]])
   dir <- file.path(root, analysis)
   if (!dir.exists(dir)) dir.create(dir, recursive = TRUE, showWarnings = FALSE)
-  fn  <- .build_filename(artifact, site, strata, horizon, variant)
+  fn   <- .build_filename(artifact, site, strata, horizon, variant)
   path <- file.path(dir, fn)
   data.table::fwrite(df, path)
   path
 }
-
-
 
 # max score before outcome -----------------------------------------------------
 
@@ -126,7 +124,14 @@ collapsed_out =
   ) |>
   fmutate(site = site_lowercase)
 
-fwrite(collapsed_out, here("proj_output", "main_output.csv"))
+write_artifact(
+  df       = collapsed_out,
+  analysis = "main",
+  artifact = "auc",
+  site     = site_lowercase,
+  strata   = "ca",
+  variant  = "counts"
+)
 
 rm(main_out, collapsed_out, scores_max); gc()
 
@@ -214,9 +219,15 @@ thresh_counts =
 
 ### save and clean up ----------------------------------------------------------
 
-fwrite(thresh_counts, here("proj_output", paste0("main_thresh_", site_lowercase, ".csv")))
+write_artifact(
+  df       = thresh_counts,
+  analysis = "threshold",
+  artifact = "cm",
+  site     = site_lowercase,
+  strata   = "ca"
+)
 
-rm(thresh_counts, scores_long_thresh, scores_long); gc()
+rm(threshold, thresh_counts, scores_long_thresh, scores_long); gc()
 
 ## time to threshold -----------------------------------------------------------
 
@@ -272,12 +283,19 @@ life_counts =
   roworder(score_name, ca_01, bin_id) |>
   fmutate(site = site_lowercase)
 
-fwrite(life_counts, here("proj_output", paste0("ci_thresh_", site_lowercase, ".csv")))
+write_artifact(
+  df       = life_counts,
+  analysis = "threshold",
+  artifact = "ever",
+  site     = site_lowercase,
+  strata   = "ca",
+  variant  = "cif"
+)
 
 ### summary stats for time to thresholds/outcomes ------------------------------
 
 time_to_thresh = 
-  select(scores, joined_hosp_id, in_dttm, end_dttm) |>
+  select(scores, joined_hosp_id, in_dttm, outcome_dttm) |>
   join(scores_thresh, how = "inner", multiple = T) |>
   fmutate(time_to_threshold = as.numeric(difftime(time, in_dttm), "hours")) |> 
   fmutate(time_to_outcome   = as.numeric(difftime(outcome_dttm, time), "hours")) |> 
@@ -305,11 +323,193 @@ time_to_thresh =
   ) |>
   fmutate(site = site_lowercase)
 
-fwrite(time_to_thresh, here("proj_output", paste0("time_to_thresh_", site_lowercase, ".csv")))
+write_artifact(
+  df       = time_to_thresh,
+  analysis = "threshold",
+  artifact = "leadtime",
+  site     = site_lowercase,
+  strata   = "ca"
+)
 
 rm(time_to_thresh, life_counts, edges, bins, thresh_tbl, scores_thresh); gc()
 
 # time based -------------------------------------------------------------------
 
+## determine whether outcome occurred in subsequent n hours from each time -----
 
+add_outcome_nh <- function(df, n) {
+  col = paste0("outcome_", n, "h")
+  mutate(df, !!col := if_else(as.numeric(difftime(outcome_dttm, time, units = "hours")) <= n, 1L, 0L, 0L))
+}
+
+df =
+  select(scores, joined_hosp_id, ca_01, time, ends_with("total"), outcome_dttm) |>
+  fsubset(time <= outcome_dttm | is.na(outcome_dttm)) |>
+  add_outcome_nh(06) |> 
+  add_outcome_nh(12) |> 
+  add_outcome_nh(24) 
+
+## put scores long -------------------------------------------------------------
+
+
+df_long =
+  funique(df) |>
+  # pivot outcomes into long
+  pivot_longer(
+    cols          = starts_with("outcome_"),
+    names_to      = "h",
+    names_pattern = "outcome_(\\d+)h",
+    values_to     = "outcome"
+  ) |>
+  # pivot predictors into long
+  pivot_longer(
+    cols      = ends_with("total"),
+    names_to  = "score",
+    values_to = "point"
+  ) |>
+  # make horizon an integer
+  fmutate(h = as.integer(h))
+
+rm(df, scores_long_h, outcomes_long_h); gc()
+
+## analyze time-dependent aurocs -----------------------------------------------
+
+### function for analysis ------------------------------------------------------
+
+analyze_time_series =
+  function(
+    data, 
+    predictors         = score_name, 
+    outcomes           = c("outcome_6h", "outcome_12h", "outcome_24h"),
+    se_target          = 0.6,
+    threshold_override = NULL, # named vector, e.g. c("esm_1" = 0.3, "esm_2" = 0.2)
+    ci_method          = "wilson" # method for binomial CIs
+  ) {
+    
+    # Helper function to calculate binomial confidence intervals
+    calc_binomial_ci = function(x, n, method = "wilson", conf_level = 0.95) {
+      if (n == 0) return(c(NA_real_, NA_real_))
+      
+      if (method == "wilson") {
+        # Wilson score interval
+        z = qnorm(1 - (1 - conf_level) / 2)
+        p = x / n
+        denom = 1 + z^2 / n
+        center = (p + z^2 / (2 * n)) / denom
+        margin = z * sqrt(p * (1 - p) / n + z^2 / (4 * n^2)) / denom
+        return(c(max(0, center - margin), min(1, center + margin)))
+      } else {
+        # Clopper-Pearson exact method
+        if (x == 0) {
+          lower = 0
+        } else {
+          lower = qbeta((1 - conf_level) / 2, x, n - x + 1)
+        }
+        
+        if (x == n) {
+          upper = 1
+        } else {
+          upper = qbeta(1 - (1 - conf_level) / 2, x + 1, n - x)
+        }
+        return(c(lower, upper))
+      }
+    }
+    
+    # All combinations of predictors and outcomes
+    analysis_grid = expand.grid(p = predictors, o = outcomes, stringsAsFactors = F)
+    
+    # Metrics for each combination
+    results = map_dfr(1:nrow(analysis_grid), function(i) {
+      
+      pred    = analysis_grid$p[i]
+      out     = analysis_grid$o[i]
+      roc_obj = roc(data[[out]], data[[pred]])
+      
+      if (!is.null(threshold_override) && pred %in% names(threshold_override)) {
+        best_thresh   = threshold_override[[pred]]
+        achieved_sens = coords(roc_obj, x = best_thresh, input = "threshold", ret = "sensitivity")
+      } else {
+        
+        # Thresholds at target sensitivity
+        thresh_data = coords(
+          roc_obj,
+          x         = "all",
+          ret       = c("threshold", "sensitivity"),
+          transpose = FALSE
+        ) |> 
+          as.data.frame()
+        
+        thresh_data   = thresh_data[order(abs(thresh_data$sensitivity - se_target)), ]
+        best_thresh   = thresh_data$threshold[1]
+        achieved_sens = thresh_data$sensitivity[1]
+      }
+      
+      pred_class    = if_else(data[[pred]] >= best_thresh, 1L, 0L)
+      cm            = table(data[[out]], pred_class)
+      
+      # Ensure 2x2 matrix
+      if(ncol(cm) == 1) {
+        missing_class = setdiff(c(0,1), colnames(cm))
+        cm            = cbind(cm, matrix(0, nrow = 2, ncol = 1, dimnames = list(NULL, missing_class)))
+      }
+      
+      # Calculate metrics
+      TP = cm["1", "1"]
+      TN = cm["0", "0"]
+      FP = cm["0", "1"]
+      FN = cm["1", "0"]
+      
+      # Calculate point estimates
+      sensitivity = TP / (TP + FN)
+      specificity = TN / (TN + FP)
+      ppv         = ifelse((TP + FP) > 0, TP / (TP + FP), NA_real_)
+      npv         = ifelse((TN + FN) > 0, TN / (TN + FN), NA_real_)
+      
+      # Calculate confidence intervals
+      sens_ci = calc_binomial_ci(TP, TP + FN, method = ci_method)
+      spec_ci = calc_binomial_ci(TN, TN + FP, method = ci_method)
+      ppv_ci  = if((TP + FP) > 0) calc_binomial_ci(TP, TP + FP, method = ci_method) else c(NA_real_, NA_real_)
+      npv_ci  = if((TN + FN) > 0) calc_binomial_ci(TN, TN + FN, method = ci_method) else c(NA_real_, NA_real_)
+      
+      tidytable(
+        predictor     = pred,
+        outcome       = out,
+        auc           = as.numeric(auc(roc_obj)),
+        auc_lci       = as.numeric(ci.auc(roc_obj)[1]),
+        auc_uci       = as.numeric(ci.auc(roc_obj)[3]),
+        sensitivity   = sensitivity,
+        sensitivity_lci = sens_ci[1],
+        sensitivity_uci = sens_ci[2],
+        specificity   = specificity,
+        specificity_lci = spec_ci[1],
+        specificity_uci = spec_ci[2],
+        ppv           = ppv,
+        ppv_lci       = ppv_ci[1],
+        ppv_uci       = ppv_ci[2],
+        npv           = npv,
+        npv_lci       = npv_ci[1],
+        npv_uci       = npv_ci[2],
+        threshold     = best_thresh,
+        thresh_src    = ifelse(!is.null(threshold_override) && pred %in% names(threshold_override), "override", "sensitivity_target")
+      )
+    })
+  }
+
+## run function to get results -------------------------------------------------
+
+thresholds = fread(here("output/performance_encounter-level_ohsu.csv"))
+t_esm1     = fsubset(thresholds, predictor == "esm1_max") |> pull(threshold_used)
+t_esm2     = fsubset(thresholds, predictor == "esm2_max") |> pull(threshold_used)
+
+time_results = 
+  analyze_time_series(
+    data               = df,
+    predictors         = c("esm_1", "esm_2"),
+    outcomes           = c("outcome_4h", "outcome_12h", "outcome_1860h"),
+    se_target          = 0.6,
+    threshold_override = c("esm_1" = t_esm1, "esm_2" = t_esm2),
+    ci_method          = "wilson"  # or "exact" for Clopper-Pearson
+  ) |>
+  select(-thresh_src) |>
+  fmutate(outcome = if_else(outcome == "outcome_1860h", "outcome_infinity", outcome))
 
