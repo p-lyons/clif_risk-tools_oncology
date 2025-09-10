@@ -1,0 +1,5 @@
+clif_data_location: "/Volumes/lyonslab/_clif_data/v_2.1"
+project_location: "/Users/lyonspa/Desktop/LyonsLab/022_clif_risk-tools_oncology"
+file_type: "parquet"
+site_lowercase: "ohsu"
+time_zone: "US/Pacific"
