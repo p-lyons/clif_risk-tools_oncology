@@ -301,8 +301,7 @@ ca_vect  = funique(toupper(ca_codes$diagnosis_code))
 dx = 
   dplyr::filter(data_list$hospital_diagnosis, hospitalization_id %in% cohort_hids) |>
   dplyr::filter(toupper(diagnosis_code) %in% ca_vect) |>
-  dplyr::filter(!is.na(start_date)) |>
-  dplyr::select(hospitalization_id, start_date, diagnosis_code) |>
+  dplyr::select(hospitalization_id, diagnosis_code) |>
   dplyr::collect() |>
   funique()
 
@@ -338,10 +337,9 @@ dx =
   ungroup() 
 
 dx = 
-  roworder(dx, rank, -start_date, diagnosis_code) |>  
+  roworder(dx, rank, diagnosis_code) |>  
   fgroup_by(hospitalization_id) |>
   fsummarize(
-    start_date     = ffirst(start_date),
     diagnosis_code = ffirst(diagnosis_code),
     rank           = ffirst(rank)
   ) |>
@@ -351,13 +349,13 @@ dx =
 
 dx = 
   join(dx, hid_jid_crosswalk, how = "left", multiple = F) |>
-  select(patient_id, start_date, diagnosis_code, liquid_01, rank) |>
+  select(patient_id, diagnosis_code, liquid_01, rank) |>
   join(cohort, how = "inner", multiple = T) |>
   fsubset(start_date >= admission_dttm - lubridate::dyears(1)) |>
   fsubset(start_date <= admission_dttm + lubridate::ddays(1)) 
 
 dx_year = 
-  roworder(dx, rank, -start_date, diagnosis_code) |>
+  roworder(dx, rank, diagnosis_code) |>
   fgroup_by(joined_hosp_id) |>
   fsummarize(
     ca_icd10_1y  = ffirst(diagnosis_code),
