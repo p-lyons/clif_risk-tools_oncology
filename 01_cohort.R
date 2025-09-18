@@ -5,6 +5,7 @@
 # resources for RAM heavy wrangling --------------------------------------------
 
 ## cores & RAM (reuse from 00 if available) ------------------------------------
+
 os_type   = if (exists("os_type"))   os_type   else Sys.info()[["sysname"]]
 all_cores = if (exists("all_cores")) all_cores else {
   x = parallel::detectCores(logical = TRUE); if (is.na(x)) 1L else as.integer(x)
@@ -301,7 +302,7 @@ ca_vect  = funique(toupper(ca_codes$diagnosis_code))
 dx = 
   dplyr::filter(data_list$hospital_diagnosis, hospitalization_id %in% cohort_hids) |>
   dplyr::filter(toupper(diagnosis_code) %in% ca_vect) |>
-  dplyr::select(hospitalization_id, diagnosis_code) |>
+  dplyr::select(hospitalization_id, poa_present, diagnosis_code) |>
   dplyr::collect() |>
   funique()
 
@@ -345,44 +346,30 @@ dx =
   ) |>
   join(ca_codes, how = "left", multiple = F)
 
-### find all codes within 1 year of encounter ----------------------------------
+### cancer dx associated with encounter only -----------------------------------
 
 dx = 
   join(dx, hid_jid_crosswalk, how = "left", multiple = F) |>
-  select(patient_id, diagnosis_code, liquid_01, rank) |>
-  join(cohort, how = "inner", multiple = T) |>
-  fsubset(start_date >= admission_dttm - lubridate::dyears(1)) |>
-  fsubset(start_date <= admission_dttm + lubridate::ddays(1)) 
-
-dx_year = 
-  roworder(dx, rank, diagnosis_code) |>
-  fgroup_by(joined_hosp_id) |>
-  fsummarize(
-    ca_icd10_1y  = ffirst(diagnosis_code),
-    liquid_01_1y = ffirst(liquid_01)
-  )
-
-### sensitivity analysis: cancer dx associated with encounter only -------------
+  select(joined_hosp_id, diagnosis_code, liquid_01, rank) |>
+  join(cohort, how = "inner", multiple = T) 
 
 dx_enc = 
-  fsubset(dx, start_date >= admission_dttm - lubridate::ddays(1)) |>
-  roworder(rank, -start_date, diagnosis_code) |>
+  roworder(dx, rank, diagnosis_code) |>
   fgroup_by(joined_hosp_id) |>
   fsummarize(
     ca_icd10_enc  = ffirst(diagnosis_code),
     liquid_01_enc = ffirst(liquid_01)
   )
 
-cohort       = join(cohort, dx_year, how = "left", multiple = F)
 cohort       = join(cohort, dx_enc,  how = "left", multiple = F)
-cohort$ca_01 = if_else(is.na(cohort$ca_icd10_1y), 0L, 1L)
+cohort$ca_01 = if_else(is.na(cohort$ca_icd10_enc), 0L, 1L)
 
 ### tally for inclusion flow diagram -------------------------------------------
 
 fig_s01_01ca = fsubset(cohort, ca_01 == 1) |> select(joined_hosp_id) |> fnunique()
 fig_s01_01no = fsubset(cohort, ca_01 == 0) |> select(joined_hosp_id) |> fnunique()
 
-rm(diagnosis_priority, dx_year, dx_enc, dx); gc()
+rm(diagnosis_priority, dx_enc, dx); gc()
 
 ## enforce admissions through ED -----------------------------------------------
 
@@ -596,7 +583,7 @@ cohort =
   fmutate(hospice_01 = if_else(tolower(discharge_category) == "hospice", 1L, 0L)) |>
   fmutate(los_hosp_d = as.numeric(difftime(discharge_dttm, admission_dttm), "hours")/24) |>
   mutate(across(
-    .cols = is.character,
+    .cols = where(is.character),
     .fns  = ~tolower(.x)
   )) |>
   select(-sex_category, -discharge_category)
