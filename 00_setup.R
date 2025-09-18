@@ -407,9 +407,17 @@ hosp_list =
 adt_list = 
   list(
     table_name = "adt",
-    req_vars   = c("hospitalization_id", "location_category", "in_dttm", "out_dttm"),
+    req_vars   = c("hospitalization_id", "hospital_id", "location_category", "in_dttm", "out_dttm"),
     req_values = list(location_category = c("ed", "icu", "ward"))
   )
+
+dx_list = list(
+  table_name = "hospital_diagnosis",
+  req_vars   = c("hospitalization_id", "diagnosis_code", "diagnosis_code_format"),
+  req_values = list(
+    diagnosis_code_format = c("ICD10CM")
+  )
+)
 
 med_list = 
   list(
@@ -442,13 +450,22 @@ labs_list =
     req_values = list(lab_category = req_labs)
   )
 
-validation_specs = list(patient_list, hosp_list, adt_list, med_list, resp_list, vitals_list, labs_list)
+validation_specs = list(
+  patient_list, 
+  hosp_list, 
+  adt_list, 
+  dx_list,
+  med_list, 
+  resp_list, 
+  vitals_list, 
+  labs_list
+)
 
 ## run validation functions ----------------------------------------------------
 
 validate_all_tables(data_list, validation_specs)
 
-rm(labs_list, vitals_list, resp_list, med_list, adt_list, hosp_list, patient_list, validation_specs)
+rm(labs_list, vitals_list, resp_list, med_list, adt_list, dx_list, hosp_list, patient_list, validation_specs)
 rm(clif_table_basenames, clif_table_filenames, required_filenames, required_tables, table_file_map)
 gc()
 
