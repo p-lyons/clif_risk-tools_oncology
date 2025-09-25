@@ -68,7 +68,9 @@ get_ram_gb = function() {
       if (length(bytes) > 0 && !is.na(bytes)) bytes / 1024^3 else NA_real_
     } else {
       # Windows & Linux: ps is usually reliable
-      val = ps::ps_system_memory()[["available"]] / 1024^3
+      mem_info <- ps::ps_system_memory()
+      key <- intersect(c("available", "avail"), names(mem_info))
+      val <- if (length(key) > 0) mem_info[[key]] / 1024^3 else NA_real_
       if (is.finite(val)) val else {
         # Linux fallback: read /proc/meminfo directly
         if (file.exists("/proc/meminfo")) {
