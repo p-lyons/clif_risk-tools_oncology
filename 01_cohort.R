@@ -252,7 +252,7 @@ if (nrow(dup_deaths) > 0) {
 #### readmissions following death ----------------------------------------------
 
 death_times = 
-  fsubset(cohort, discharge_category == "Expired") |>
+  fsubset(cohort, tolower(discharge_category) == "expired") |>
   roworder(discharge_dttm) |>
   fgroup_by(patient_id) |>
   fsummarise(death_instant = ffirst(discharge_dttm))
@@ -578,14 +578,15 @@ if (nrow(pt_dups) > 0) {
 cohort = 
   join(cohort, cohort_demographics, how = "left", multiple = F) |>
   fmutate(age        = if_else(age > 90, 90.9, age)) |>
-  fmutate(female_01  = if_else(sex_category == "Female", 1L, 0L)) |>
+  fmutate(female_01  = if_else(tolower(sex_category) == "female", 1L, 0L)) |>
   fmutate(dead_01    = if_else(tolower(discharge_category) == "expired", 1L, 0L)) |>
   fmutate(hospice_01 = if_else(tolower(discharge_category) == "hospice", 1L, 0L)) |>
   fmutate(los_hosp_d = as.numeric(difftime(discharge_dttm, admission_dttm), "hours")/24) |>
-  mutate(across(
-    .cols = where(is.character),
-    .fns  = ~tolower(.x)
-  )) |>
+  #JHU Patch: Putting patient_id into lowercase broke this key; can imagine some institutions may have numeric patient id, but addressing the lowercase issue idependent of patient id may make sense
+  #mutate(across(
+    #.cols = where(is.character),
+    #.fns  = ~tolower(.x)
+  #)) |>
   select(-sex_category, -discharge_category)
 
 rm(pt_dups, cohort_demographics); gc()
@@ -605,7 +606,7 @@ codes =
   roworder(start_dttm) |>
   fgroup_by(joined_hosp_id) |>
   fsummarize(initial_code_status = ffirst(code_status_category)) |>
-  fmutate(initial_code_status = if_else(initial_code_status == "DNR", "Special/Partial", initial_code_status))
+  fmutate(initial_code_status = if_else(tolower(initial_code_status) == "dnr", "Special/Partial", initial_code_status))
 
 cohort = join(cohort, codes, how = "left", multiple = F)
 
@@ -648,7 +649,9 @@ icu =
   roworder(icu, in_dttm) |>
   group_by(joined_hosp_id) |>
   mutate(prev_loc = lag(location_category)) |>
-  mutate(ward_icu = location_category == "icu" & prev_loc == "ward") |>
+  #Avoid Categorizing radiology/dialysis/other, as the event before ward
+  fsubset(tolower(location_category) %in% c('icu', 'ward')) |>
+  mutate(ward_icu = tolower(location_category) == "icu" & tolower(prev_loc) == "ward") |>
   ungroup() |>
   fsubset(ward_icu)
 

@@ -370,7 +370,7 @@ df_long =
   # make horizon an integer
   fmutate(h = as.integer(h))
 
-rm(df, scores_long_h, outcomes_long_h); gc()
+rm(scores_long_h, outcomes_long_h); gc()
 
 ## analyze time-dependent aurocs -----------------------------------------------
 
@@ -504,8 +504,8 @@ t_esm2     = fsubset(thresholds, predictor == "esm2_max") |> pull(threshold_used
 time_results = 
   analyze_time_series(
     data               = df,
-    predictors         = c("esm_1", "esm_2"),
-    outcomes           = c("outcome_4h", "outcome_12h", "outcome_1860h"),
+    predictors         = score_name, #c("esm_1", "esm_2"),
+    outcomes           = c("outcome_6h", "outcome_12h", "outcome_24h"), #c("outcome_4h", "outcome_12h", "outcome_1860h"),
     se_target          = 0.6,
     threshold_override = c("esm_1" = t_esm1, "esm_2" = t_esm2),
     ci_method          = "wilson"  # or "exact" for Clopper-Pearson
