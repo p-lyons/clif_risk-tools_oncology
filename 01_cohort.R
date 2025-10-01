@@ -1,4 +1,5 @@
 
+
 # Cohort script for CLIF project validating risk tools in oncology.
 # Requires data_list to be loaded/validated from 00_*
 
@@ -30,12 +31,12 @@ if (!exists("avail_ram_gb") || !is.finite(avail_ram_gb)) {
 
 ## choose threads (2 GB per thread; leave 1 core free) -------------------------
 
-reserve_cores = 1L
-gb_per_thread = 2.0
-max_by_cores  = max(1L, all_cores - reserve_cores)
-max_by_memory = if (is.finite(avail_ram_gb)) max(1L, floor(avail_ram_gb / gb_per_thread)) else max_by_cores
-n_threads     = as.integer(max(1L, min(max_by_cores, max_by_memory)))
-n_math_threads= as.integer(max(1L, min(n_threads, 8L)))
+reserve_cores  = 1L
+gb_per_thread  = 2.0
+max_by_cores   = max(1L, all_cores - reserve_cores)
+max_by_memory  = if (is.finite(avail_ram_gb)) max(1L, floor(avail_ram_gb / gb_per_thread)) else max_by_cores
+n_threads      = as.integer(max(1L, min(max_by_cores, max_by_memory)))
+n_math_threads = as.integer(max(1L, min(n_threads, 8L)))
 
 ## apply thread settings -------------------------------------------------------
 
@@ -390,13 +391,9 @@ first_ed_jids =
 
 ### apply exclusion to cohort --------------------------------------------------
 
-cohort       = fsubset(cohort, joined_hosp_id %in% first_ed_jids)
-cohort_pats  = funique(cohort$patient_id)
-cohort_jids  = funique(cohort$joined_hosp_id)
-cohort_hids  = funique(hid_jid_crosswalk$hospitalization_id)
-date_frame   = select(cohort, patient_id, joined_hosp_id, ends_with("dttm"))
-fig_s01_02ca = fsubset(cohort, ca_01 == 1) |> select(joined_hosp_id) |> fnunique()
-fig_s01_02no = fsubset(cohort, ca_01 == 0) |> select(joined_hosp_id) |> fnunique()
+cohort$ed_admit_01 = if_else(cohort$joined_hosp_id %in% first_ed_jids, 1L, 0L)
+fig_s01_02ca       = fsubset(cohort, ca_01 == 1 & ed_admit_01 == 1) |> fselect(joined_hosp_id) |> fnunique()
+fig_s01_02no       = fsubset(cohort, ca_01 == 0 & ed_admit_01 == 1) |> fselect(joined_hosp_id) |> fnunique()
 
 ## enforce no ICU before touching the wards ------------------------------------
 
@@ -406,7 +403,7 @@ icu_before_wards =
   dplyr::filter(data_list$adt, hospitalization_id %in% cohort_hids) |>
   dplyr::filter(tolower(location_category) %in% c("icu", "ward")) |>
   dplyr::collect() |>
-  fmutate(location_category = tolower(location_category))
+  ftransform(location_category = tolower(location_category))
 
 icu_before_wards = 
   join(icu_before_wards, hid_jid_crosswalk, how = "inner", multiple = T) |>
@@ -430,8 +427,8 @@ cohort_pats  = funique(cohort$patient_id)
 cohort_jids  = funique(cohort$joined_hosp_id)
 cohort_hids  = funique(hid_jid_crosswalk$hospitalization_id)
 date_frame   = select(cohort, patient_id, joined_hosp_id, ends_with("dttm"))
-fig_s01_03ca = fsubset(cohort, ca_01 == 1) |> select(joined_hosp_id) |> fnunique()
-fig_s01_03no = fsubset(cohort, ca_01 == 0) |> select(joined_hosp_id) |> fnunique()
+fig_s01_03ca = fsubset(cohort, ca_01 == 1 & ed_admit_01 == 1) |> fselect(joined_hosp_id) |> fnunique()
+fig_s01_03no = fsubset(cohort, ca_01 == 0 & ed_admit_01 == 1) |> fselect(joined_hosp_id) |> fnunique()
 
 rm(icu_before_wards, ed_admits, first_ed_jids); gc()
 
@@ -464,7 +461,7 @@ first_ward =
 vmax = 
   join(vmax, first_ward, how = "inner", multiple = F) |>
   fsubset(vtime < first_ward_dttm + lubridate::dhours(min_ward_hours)) |>
-  select(joined_hosp_id) |>
+  fselect(joined_hosp_id) |>
   tibble::deframe()
 
 ### apply exclusion to cohort --------------------------------------------------
@@ -475,8 +472,8 @@ cohort_pats  = funique(cohort$patient_id)
 cohort_jids  = funique(cohort$joined_hosp_id)
 cohort_hids  = funique(hid_jid_crosswalk$hospitalization_id)
 date_frame   = select(cohort, patient_id, joined_hosp_id, ends_with("dttm"))
-fig_s01_04ca = fsubset(cohort, ca_01 == 1) |> select(joined_hosp_id) |> fnunique()
-fig_s01_04no = fsubset(cohort, ca_01 == 0) |> select(joined_hosp_id) |> fnunique()
+fig_s01_04ca = fsubset(cohort, ca_01 == 1 & ed_admit_01 == 1) |> fselect(joined_hosp_id) |> fnunique()
+fig_s01_04no = fsubset(cohort, ca_01 == 0 & ed_admit_01 == 1) |> fselect(joined_hosp_id) |> fnunique()
 
 rm(vmax); gc()
 
@@ -507,7 +504,7 @@ icu =
 icu = 
   join(icu, cohort, how = "inner", multiple = F) |>
   fsubset(itime < first_ward_dttm + lubridate::dhours(6)) |>
-  select(joined_hosp_id) |>
+  fselect(joined_hosp_id) |>
   tibble::deframe()
 
 ### apply exclusion to cohort --------------------------------------------------
@@ -518,8 +515,8 @@ cohort_pats  = funique(cohort$patient_id)
 cohort_jids  = funique(cohort$joined_hosp_id)
 cohort_hids  = funique(hid_jid_crosswalk$hospitalization_id)
 date_frame   = select(cohort, patient_id, joined_hosp_id, ends_with("dttm"))
-fig_s01_05ca = fsubset(cohort, ca_01 == 1) |> select(joined_hosp_id) |> fnunique()
-fig_s01_05no = fsubset(cohort, ca_01 == 0) |> select(joined_hosp_id) |> fnunique()
+fig_s01_05ca = fsubset(cohort, ca_01 == 1 & ed_admit_01 == 1) |> select(joined_hosp_id) |> fnunique()
+fig_s01_05no = fsubset(cohort, ca_01 == 0 & ed_admit_01 == 1) |> select(joined_hosp_id) |> fnunique()
 
 rm(icu); gc()
 
@@ -586,7 +583,7 @@ cohort =
     .cols = where(is.character) & !any_of("patient_id"),
     .fns  = ~tolower(.x)
   )) |>
-  select(-sex_category, -discharge_category)
+  fselect(-sex_category, -discharge_category)
 
 rm(pt_dups, cohort_demographics); gc()
 
@@ -628,7 +625,7 @@ icu =
 
 icu = 
   join(icu, hid_jid_crosswalk, how = "left",  multiple = T) |>
-  select(joined_hosp_id, in_dttm, location_category) |>
+  fselect(joined_hosp_id, in_dttm, location_category) |>
   funique() |>
   join(date_frame, how = "inner", multiple = T) |>
   fsubset(in_dttm >= admission_dttm & in_dttm <= discharge_dttm) |>
@@ -638,7 +635,7 @@ icu =
 
 icu_encs = 
   fsubset(icu, location_category == "icu") |>
-  select(joined_hosp_id) |>
+  fselect(joined_hosp_id) |>
   funique() |>
   tibble::deframe()
 
@@ -660,7 +657,7 @@ icu =
   roworder(icu, in_dttm) |>
   fgroup_by(joined_hosp_id) |>
   fsummarize(event_dttm = ffirst(in_dttm))  |>
-  fmutate(event = "icu") 
+  ftransform(event = "icu") 
 
 ## death -----------------------------------------------------------------------
 
@@ -705,7 +702,7 @@ fwrite(df_outcomes, here("proj_tables", "outcome_times.csv"))
 
 ward_icu_tx = 
   fsubset(df_outcomes, outcome_cat == "icu") |>
-  select(joined_hosp_id) |>
+  fselect(joined_hosp_id) |>
   tibble::deframe()
 
 rm(df_outcomes, death, hospice, icu); gc()
@@ -727,7 +724,7 @@ meds =
   dplyr::select(hospitalization_id, admin_dttm, ends_with("category")) |>
   dplyr::collect() |>
   join(hid_jid_crosswalk, how = "inner", multiple = T) |>
-  select(joined_hosp_id, admin_dttm, med_category) |>
+  fselect(joined_hosp_id, admin_dttm, med_category) |>
   funique()
 
 meds = 
@@ -755,7 +752,7 @@ resp =
   dplyr::select(hospitalization_id, recorded_dttm, device_category) |>
   dplyr::collect() |>
   join(hid_jid_crosswalk, how = "inner", multiple = T) |>
-  select(joined_hosp_id, recorded_dttm, device_category) |>
+  fselect(joined_hosp_id, recorded_dttm, device_category) |>
   funique()
 
 resp = 
@@ -857,7 +854,8 @@ write_parquet(hid_jid_crosswalk, here("proj_tables", "hid_jid_crosswalk.parquet"
 ## prepare table component = continuous variables ------------------------------
 
 t2_cont = 
-  fgroup_by(cohort, ca_01) |>
+  fsubset(cohort, ed_admit_01 == 1) |>
+  fgroup_by(ca_01) |>
   fsummarize(
     n         = fnobs(joined_hosp_id),
     age_sum   = fsum(age,          na.rm = TRUE),
@@ -880,14 +878,15 @@ age_breaks = c( 18,      40,      50,      60,      70,      80,  Inf)
 age_labs   = c("18_39", "40_49", "50_59", "60_69", "70_79", "80_plus")
 
 ages_cat = 
-  select(cohort, ca_01, age) |>
+  fsubset(cohort, ed_admit_01 == 1) |>
+  fselect(ca_01, age) |>
   fmutate(a = cut(age, breaks = age_breaks, labels = age_labs, right = F)) |>
   fgroup_by(ca_01, a) |>
   fnobs() |>
   select(ca_01, age_cat = a, n = age) |>
   ftransform(age_cat = paste0("age_", age_cat)) |>
   ftransform(var = "age", category = str_remove(age_cat, "age_")) |>
-  select(ca_01, var, category, n) 
+  fselect(ca_01, var, category, n) 
 
 ### los (days) -----------------------------------------------------------------
 
@@ -895,18 +894,20 @@ l_breaks = c( 0,        2,         4,         7,         14, Inf)
 l_labs   = c("0-47h", "48h_96h", "96h_1wk", "1wk_2wk", "2wk_plus")
 
 los_cat = 
-  select(cohort, ca_01, los_hosp_d) |>
+  fsubset(cohort, ed_admit_01 == 1) |>
+  fselect(ca_01, los_hosp_d) |>
   fmutate(los_cat = cut(los_hosp_d, breaks = l_breaks, labels = l_labs, right = F)) |>
   fgroup_by(ca_01, los_cat) |>
   fnobs() |>
   select(ca_01, los_cat, n = los_hosp_d) |>
   ftransform(var = "los", category = los_cat) |>
-  select(ca_01, var, category, n) 
+  fselect(ca_01, var, category, n) 
 
 ## prepare table component = categorical variables -----------------------------
 
 t2_cat = 
-  select(cohort, -ends_with("id"), -ends_with("dttm"),  -age, -los_hosp_d) |>
+  fsubset(cohort, ed_admit_01 == 1) |>
+  select(-ends_with("id"), -ends_with("dttm"),  -age, -los_hosp_d) |>
   pivot_longer(-ca_01, names_to = "var", values_to = "val") |>
   fsubset(!is.na(val)) |>
   fmutate(n = val) |>
@@ -914,7 +915,7 @@ t2_cat =
   fnobs() |>
   ftransform(var      = str_remove(var, "_01")) |>
   ftransform(category = tolower(str_replace_all(as.character(val), "-", "_"))) |>
-  select(ca_01, var, category, n) 
+  fselect(ca_01, var, category, n) 
 
 ## quality control -------------------------------------------------------------
 
@@ -938,7 +939,7 @@ if (nrow(small_c) > 0) {
 
 ### check for sample size mismatch in continuous table -------------------------
 
-if (sum(t2_cont$n) != nrow(cohort)) {
+if (sum(t2_cont$n) != nrow(cohort[ed_admit_01 == 1])) {
   stop("ERROR: Sample size mismatch! Sum of t2_cont$n != nrow(df)")
 }
 
