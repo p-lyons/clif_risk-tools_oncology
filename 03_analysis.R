@@ -5,7 +5,7 @@
 
 ## function to write files -----------------------------------------------------
 
-.allowed <- list(
+.allowed = list(
   main        = c("auc","cm"),
   threshold   = c("ever","first","cm","comps","leadtime"),
   sensitivity = c("auc","cm","ever","first","comps","leadtime"),
@@ -13,27 +13,28 @@
   horizon     = c("auc","cm","counts")
 )
 
-# filename: {artifact}{_strata?}{_h{hrs}?}{-variant?}-{site}.csv
+### filename: {artifact}{_strata?}{_h{hrs}?}{-variant?}-{site}.csv -------------
+
 .build_filename <- function(artifact, site, strata = NULL, horizon = NULL, variant = NULL) {
   stopifnot(nzchar(artifact), nzchar(site))
   nm <- artifact
-  if (!is.null(strata)  && nzchar(strata))  nm <- paste0(nm, "_", strata)
-  if (!is.null(horizon) && nzchar(horizon)) nm <- paste0(nm, "_h", horizon)
-  if (!is.null(variant) && nzchar(variant)) nm <- paste0(nm, "-", variant)
+  if (!is.null(strata)  && nzchar(strata))  nm = paste0(nm, "_", strata)
+  if (!is.null(horizon) && nzchar(horizon)) nm = paste0(nm, "_h", horizon)
+  if (!is.null(variant) && nzchar(variant)) nm = paste0(nm, "-", variant)
   paste0(nm, "-", site, ".csv")
 }
 
-# write CSV to proj_output/{analysis}/...
+### write CSV to proj_output/{analysis}/... ------------------------------------
+
 write_artifact <- function(df, analysis, artifact, site,
                            strata = NULL, horizon = NULL, variant = NULL,
                            root = "proj_output") {
-  stopifnot(analysis %in% names(.allowed),
-            artifact %in% .allowed[[analysis]])
-  dir <- file.path(root, analysis)
+  stopifnot(analysis %in% names(.allowed), artifact %in% .allowed[[analysis]])
+  dir = file.path(root, analysis)
   if (!dir.exists(dir)) dir.create(dir, recursive = TRUE, showWarnings = FALSE)
-  fn   <- .build_filename(artifact, site, strata, horizon, variant)
-  path <- file.path(dir, fn)
-  data.table::fwrite(df, path)
+  fn   = .build_filename(artifact, site, strata, horizon, variant)
+  path = file.path(dir, fn)
+  tidytable::fwrite(df, path)
   path
 }
 
@@ -62,7 +63,7 @@ main_out =
     names_to  = "score_name",
     values_to = "value"
   ) |>
-  fmutate(score_name = str_remove(score_name, "_max")) |>
+  ftransform(score_name = str_remove(score_name, "_max")) |>
   fgroup_by(ca_01, o_primary_01, score_name, value) |>
   fsummarize(n = fnobs(joined_hosp_id))
 
@@ -98,17 +99,15 @@ collapse_small <- function(dt, grpvars, val_var = "value", n_var = "n", thresh =
   }, by = grpvars]
   
   setnames(dt_out, c("value", "n"), c(val_var, n_var))
-  
   pct = collapsed_n / total_n
   
   if (pct > max_pct_collapse) {
     stop(sprintf("❌ Collapsed %.4f%% of observations (>%.0f%% allowed). Review needed.", 
-                 100 * pct, 100 * max_pct_collapse))
+                 100*pct, 100*max_pct_collapse))
   } else {
     message(sprintf("✅ Collapsed safely: %.4f%% of observations collapsed (≤%.0f%% allowed).",
-                    100 * pct, 100 * max_pct_collapse))
+                    100*pct, 100*max_pct_collapse))
   }
-  
   dt_out
 }
 
