@@ -41,7 +41,7 @@ vitals_list$temp_c =
       TRUE        ~ NA_integer_
     )
   ) |>
-  select(-val)
+  fselect(-val)
 
 ## heart rate (sirs, mews, news) -----------------------------------------------
 
@@ -68,7 +68,7 @@ vitals_list$heart_rate =
       TRUE        ~ NA_integer_
     )
   ) |>
-  select(-val)
+  fselect(-val)
 
 ## respiratory rate (sirs, qsofa, mews, news) ----------------------------------
 
@@ -94,7 +94,7 @@ vitals_list$respiratory_rate =
       TRUE       ~ NA_integer_
     )
   ) |>
-  select(-val)
+  fselect(-val)
 
 ## sbp (qsofa, mews, news) -----------------------------------------------------
 
@@ -119,7 +119,7 @@ vitals_list$sbp =
       TRUE       ~ NA_integer_
     )
   ) |>
-  select(-val)
+  fselect(-val)
 
 ## spo2 (news) -----------------------------------------------------------------
 
@@ -134,7 +134,7 @@ vitals_list$spo2 =
       TRUE      ~ NA_integer_
     )
   ) |>
-  select(-val)
+  fselect(-val)
 
 # extract labs and assign score points -----------------------------------------
 
@@ -272,10 +272,17 @@ scores =
 
 cancer = 
   fsubset(cohort, ca_01 == 1) |>
-  select(joined_hosp_id) |>
-  tibble::deframe()
+  pull(joined_hosp_id) 
 
 scores$ca_01 = if_else(scores$joined_hosp_id %in% cancer, 1L, 0L)
+
+# add ed admission to score df -------------------------------------------------
+
+ed = 
+  fsubset(cohort, ed_admit_01 == 1) |>
+  pull(joined_hosp_id) 
+
+scores$ed_admit_01 = if_else(scores$joined_hosp_id %in% ed, 1L, 0L)
 
 # save scores ------------------------------------------------------------------
 
@@ -286,6 +293,3 @@ rm(ward_times, outcomes, cancer); gc()
 # go to 03
 
 ################################################################################
-
-
-
