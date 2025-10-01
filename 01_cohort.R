@@ -582,11 +582,10 @@ cohort =
   fmutate(dead_01    = if_else(tolower(discharge_category) == "expired", 1L, 0L)) |>
   fmutate(hospice_01 = if_else(tolower(discharge_category) == "hospice", 1L, 0L)) |>
   fmutate(los_hosp_d = as.numeric(difftime(discharge_dttm, admission_dttm), "hours")/24) |>
-  #JHU Patch: Putting patient_id into lowercase broke this key; can imagine some institutions may have numeric patient id, but addressing the lowercase issue idependent of patient id may make sense
-  #mutate(across(
-    #.cols = where(is.character),
-    #.fns  = ~tolower(.x)
-  #)) |>
+  mutate(across(
+    .cols = where(is.character) & !any_of("patient_id"),
+    .fns  = ~tolower(.x)
+  )) |>
   select(-sex_category, -discharge_category)
 
 rm(pt_dups, cohort_demographics); gc()
