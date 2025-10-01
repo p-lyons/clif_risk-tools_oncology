@@ -646,10 +646,10 @@ icu_encs =
 
 icu = 
   roworder(icu, in_dttm) |>
+  # avoid categorizing radiology/dialysis/other as the event before ward
+  fsubset(tolower(location_category) %in% c('icu', 'ward')) |>
   group_by(joined_hosp_id) |>
   mutate(prev_loc = lag(location_category)) |>
-  #Avoid Categorizing radiology/dialysis/other, as the event before ward
-  fsubset(tolower(location_category) %in% c('icu', 'ward')) |>
   mutate(ward_icu = tolower(location_category) == "icu" & tolower(prev_loc) == "ward") |>
   ungroup() |>
   fsubset(ward_icu)
