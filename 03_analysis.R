@@ -298,22 +298,27 @@ all_encs =
   fsubset(cohort, ed_admit_01 == 1) |>
   fselect(joined_hosp_id, ca_01)
 
-ever_positive_complete = 
+ever_positive_complete =
   tidyr::expand_grid(
     joined_hosp_id = all_encs$joined_hosp_id,
     score_name     = THRESHOLDS$score_name
   ) |>
-  join(all_encs, how = "left", multiple = FALSE) |>
+  tidytable::as_tidytable() |>
+  # explicit keys prevent ca_01.x / ca_01.y
+  join(all_encs,      how = "left", multiple = FALSE) |>
   join(ever_positive, how = "left", multiple = FALSE) |>
-  ftransform(ever_positive = if_else(is.na(time_to_positive_h), 0L, 1L))
+  ftransform(ever_positive = as.integer(!is.na(time_to_positive_h))) |>
+  fselect(joined_hosp_id, score_name, ca_01, ever_positive)
+
+# sanity check
+stopifnot(all(c("score_name","ca_01","ever_positive") %chin% names(ever_positive_complete)))
 
 ## aggregate to counts (no identifiers) ----------------------------------------
 
-ever_positive_agg = 
-  ever_positive_complete |>
-  fgroup_by(score_name, ca_01, ever_positive) |>
-  fsummarize(n = n()) |>
-  ftransform(site = site_lowercase)
+ever_positive_agg =
+  as.data.table(ever_positive_complete)[
+    , .(n = .N), by = .(score_name, ca_01, ever_positive)
+  ][, site := site_lowercase][]
 
 write_artifact(
   df       = ever_positive_agg,
