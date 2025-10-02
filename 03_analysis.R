@@ -10,11 +10,10 @@ HORIZONS = c(12L, 24L)
 VARIANTS = c("main", "se_no_ed_req", "se_fullcode_only", "se_win0_96h", "se_one_enc_per_pt")
 
 .allowed = list(
-  main        = c("auc", "cm", "maxscores"),
-  threshold   = c("ever", "first", "cm", "comps", "leadtime"),
-  sensitivity = c("auc", "cm", "ever", "first", "comps", "leadtime", "maxscores", "indices", "counts"),
-  subgroups   = c("auc", "cm", "counts"),
-  horizon     = c("auc", "cm", "counts")
+  main        = c("maxscores"),
+  threshold   = c("ever"),
+  sensitivity = c("maxscores", "counts"),
+  horizon     = c("counts")
 )
 
 # helper functions -------------------------------------------------------------
@@ -119,7 +118,19 @@ materialize_variant_max = function(variant, scores_max_enc) {
     stop("Unknown variant: ", variant)
   )
   
+  # remove identifiers before returning
+  dt = fselect(dt, -patient_id, -joined_hosp_id)
   as.data.table(dt)[]
+}
+
+## aggregate max scores to counts ----------------------------------------------
+
+aggregate_maxscores = function(dt, site_lowercase) {
+  dt |>
+    fgroup_by(score_name, ca_01, max_value, outcome) |>
+    fsummarize(n = n()) |>
+    ftransform(site = site_lowercase) |>
+    as.data.table()
 }
 
 ## collapse small cells --------------------------------------------------------
@@ -205,28 +216,6 @@ run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 100L) 
   rbindlist(boot_list, use.names = TRUE)[]
 }
 
-## threshold confusion matrix per horizon --------------------------------------
-
-run_threshold_cm = function(dt, horizons, site_lowercase) {
-  setkey(THRESHOLDS, score_name)
-  
-  cm_list = lapply(horizons, function(HH) {
-    dt[, y := make_y(h_to_event, HH)]
-    merged = dt[THRESHOLDS, on = "score_name", nomatch = NULL]
-    merged[, pred := as.integer(value >= threshold)]
-    
-    merged[, .(
-      n_tp  = sum(pred == 1L & y == 1L, na.rm = TRUE),
-      n_fp  = sum(pred == 1L & y == 0L, na.rm = TRUE),
-      n_tn  = sum(pred == 0L & y == 0L, na.rm = TRUE),
-      n_fn  = sum(pred == 0L & y == 1L, na.rm = TRUE),
-      n_obs = .N
-    ), by = .(score_name, ca_01)
-    ][, `:=`(site = site_lowercase, h = HH)]
-  })
-  rbindlist(cm_list, use.names = TRUE)[]
-}
-
 # create long-form base with precomputed time features -------------------------
 
 scores_long_base = 
@@ -269,26 +258,19 @@ scores_max_enc =
     patient_id  = ffirst(patient_id),
     ca_01       = ffirst(ca_01),
     ed_admit_01 = ffirst(ed_admit_01),
+    fullcode_01 = if_else(ffirst(joined_hosp_id) %in% fc, 1L, 0L),
     sirs_max    = fmax(sirs_total,  na.rm = TRUE),
     qsofa_max   = fmax(qsofa_total, na.rm = TRUE),
     mews_max    = fmax(mews_total,  na.rm = TRUE),
     news_max    = fmax(news_total,  na.rm = TRUE),
     outcome     = ffirst(o_primary_01)
   ) |>
-  join(
-    fsubset(cohort, tolower(initial_code_status) == "full") |> 
-      fselect(joined_hosp_id) |> 
-      fmutate(fullcode_01 = 1L),
-    how = "left", multiple = FALSE
-  ) |>
-  ftransform(fullcode_01 = if_else(is.na(fullcode_01), 0L, fullcode_01)) |>
   pivot_longer(
     cols      = ends_with("max"),
     names_to  = "score_name",
     values_to = "max_value"
   ) |>
-  ftransform(score_name = str_remove(score_name, "_max")) |>
-  ftransform(site = site_lowercase)
+  ftransform(score_name = str_remove(score_name, "_max"))
 
 # ever positive analysis (time to first threshold crossing) -------------------
 
@@ -323,11 +305,18 @@ ever_positive_complete =
   ) |>
   join(all_encs, how = "left", multiple = FALSE) |>
   join(ever_positive, how = "left", multiple = FALSE) |>
-  ftransform(ever_positive = if_else(is.na(time_to_positive_h), 0L, 1L)) |>
+  ftransform(ever_positive = if_else(is.na(time_to_positive_h), 0L, 1L))
+
+## aggregate to counts (no identifiers) ----------------------------------------
+
+ever_positive_agg = 
+  ever_positive_complete |>
+  fgroup_by(score_name, ca_01, ever_positive) |>
+  fsummarize(n = n()) |>
   ftransform(site = site_lowercase)
 
 write_artifact(
-  df       = ever_positive_complete,
+  df       = ever_positive_agg,
   analysis = "threshold",
   artifact = "ever",
   site     = site_lowercase,
@@ -385,31 +374,21 @@ for (v in VARIANTS) {
     )
   }
   
-  ### threshold confusion matrix per horizon -----------------------------------
-  
-  message("  Computing threshold confusion matrices...")
-  cm_thresh = run_threshold_cm(dt_v, HORIZONS, site_lowercase)
-  
-  for (HH in HORIZONS) {
-    write_artifact(
-      df       = cm_thresh[h == HH],
-      analysis = if (v == "main") "horizon" else "sensitivity",
-      artifact = "cm",
-      site     = site_lowercase,
-      strata   = "ca",
-      horizon  = HH,
-      variant  = if (v == "main") "thresh" else paste0("thresh-", v)
-    )
-  }
-  
   ## encounter-level max score analyses ----------------------------------------
   
   dt_max = materialize_variant_max(v, scores_max_enc)
   
   if (!is.null(dt_max)) {
     message("  Writing encounter-level max scores...")
+    dt_max_agg = aggregate_maxscores(dt_max, site_lowercase)
+    
+    # collapse small cells
+    if (exists("collapse_small")) {
+      dt_max_agg = collapse_small(dt_max_agg, grpvars = c("score_name", "ca_01", "outcome"), val_var = "max_value")
+    }
+    
     write_artifact(
-      df       = dt_max,
+      df       = dt_max_agg,
       analysis = if (v == "main") "main" else "sensitivity",
       artifact = "maxscores",
       site     = site_lowercase,
@@ -418,24 +397,6 @@ for (v in VARIANTS) {
     )
   } else {
     message("  Skipping encounter-level max scores (not applicable for this variant)")
-  }
-  
-  ## save encounter indices for reproducibility -------------------------------
-  
-  if (v == "se_one_enc_per_pt") {
-    idx_df = 
-      dt_v[, .(patient_id, joined_hosp_id)] |>
-      unique() |>
-      as_tidytable() |>
-      fmutate(variant = v, seed = 2025L)
-    
-    write_artifact(
-      df       = idx_df,
-      analysis = "sensitivity",
-      artifact = "indices",
-      site     = site_lowercase,
-      variant  = "indices-se_one_enc_per_pt"
-    )
   }
 }
 
