@@ -7,11 +7,11 @@ THRESHOLDS = tidytable(
 
 HORIZONS = c(12L, 24L)
 
-VARIANTS = c("main", "se_no_ed_req", "se_fullcode_only", "se_win0_96h", "se_one_enc_per_pt")
+VARIANTS = c("main", "se_no_ed_req", "se_fullcode_only", "se_win0_120h", "se_one_enc_per_pt")
 
 .allowed = list(
   main        = c("maxscores"),
-  threshold   = c("ever"),
+  threshold   = c("ever", "upset"),
   sensitivity = c("maxscores", "counts"),
   horizon     = c("counts")
 )
@@ -77,8 +77,8 @@ materialize_variant = function(variant) {
     se_fullcode_only = {
       dt = dt[fullcode_01 == 1L]
     },
-    se_win0_96h = {
-      dt = dt[h_from_admit >= 0 & h_from_admit <= 96]
+    se_win0_120h = {
+      dt = dt[h_from_admit >= 0 & h_from_admit <= 120]
     },
     se_one_enc_per_pt = {
       enc_tbl   = funique(fselect(scores, joined_hosp_id, patient_id))
@@ -107,7 +107,7 @@ materialize_variant_max = function(variant, scores_max_enc) {
     se_fullcode_only = {
       dt = dt[fullcode_01 == 1L]
     },
-    se_win0_96h = {
+    se_win0_120h = {
       return(NULL)
     },
     se_one_enc_per_pt = {
@@ -388,10 +388,9 @@ for (v in VARIANTS) {
     message("  Writing encounter-level max scores...")
     dt_max_agg = aggregate_maxscores(dt_max, site_lowercase)
     
-    # collapse small cells
-    if (exists("collapse_small")) {
-      dt_max_agg = collapse_small(dt_max_agg, grpvars = c("score_name", "ca_01", "outcome"), val_var = "max_value")
-    }
+  if (exists("collapse_small")) {
+    dt_max_agg = collapse_small(dt_max_agg, grpvars = c("score_name", "ca_01", "outcome"), val_var = "max_value")
+  }
     
     write_artifact(
       df       = dt_max_agg,
@@ -407,3 +406,111 @@ for (v in VARIANTS) {
 }
 
 message("\n== All variants complete ==")
+
+# subgroup analysis by cancer type ---------------------------------------------
+
+message("\n== Cancer type subgroup analysis ==")
+
+## ensure liquid_01 is in the base data ----------------------------------------
+
+liq = 
+  fsubset(cohort, liquid_01 == 1) |>
+  pull(joined_hosp_id)
+  
+ever_positive_complete = 
+  fsubset(ever_positive_complete, ca_01 == 1) |>
+  ftransform(liquid_01 = if_else(joined_hosp_id %in% liq, 1L, 0L))
+  
+scores_long_base = 
+  fsubset(scores_long_base, ca_01 == 1 & ed_admit_01 == 1) |>
+  ftransform(liquid_01 = if_else(joined_hosp_id %in% liq, 1L, 0L))
+
+## max scores by encounter (liquid subgroup) -----------------------------------
+
+dt_max_liquid = 
+  fsubset(scores_max_enc, ca_01 == 1 & ed_admit_01 == 1) |>
+  ftransform(liquid_01 = if_else(joined_hosp_id %in% liq, 1L, 0L)) |>
+  fselect(-patient_id, -joined_hosp_id, -ca_01, -ed_admit_01, -fullcode_01)
+
+dt_max_liquid_agg = 
+  as.data.table(dt_max_liquid)[
+    , .(n = .N), by = .(score_name, liquid_01, max_value, outcome)
+  ][, site := site_lowercase][]
+
+if (exists("collapse_small")) {
+  dt_max_liquid_agg = collapse_small(
+    dt_max_liquid_agg, 
+    grpvars = c("score_name", "liquid_01", "outcome"), 
+    val_var = "max_value"
+  )
+}
+
+write_artifact(
+  df       = dt_max_liquid_agg,
+  analysis = "main",
+  artifact = "maxscores",
+  site     = site_lowercase,
+  strata   = "liquid"
+)
+
+## 24h horizon counts (liquid subgroup) ----------------------------------------
+
+message("  Computing 24h horizon counts by liquid_01...")
+
+dt_liquid_24h = 
+  fsubset(scores_long_base, ca_01 == 1 & ed_admit_01 == 1)
+
+dt_liquid_24h[, outcome := make_y(h_to_event, 24L)]
+
+counts_liquid_24h = 
+  dt_liquid_24h[, .(n = .N), by = .(score_name, liquid_01, value, outcome)
+  ][, `:=`(site = site_lowercase, h = 24L)]
+
+if (exists("collapse_small")) {
+  counts_liquid_24h = collapse_small(
+    counts_liquid_24h, 
+    grpvars = c("score_name", "liquid_01", "outcome")
+  )
+}
+
+write_artifact(
+  df       = counts_liquid_24h,
+  analysis = "horizon",
+  artifact = "counts",
+  site     = site_lowercase,
+  strata   = "liquid",
+  horizon  = 24L
+)
+
+# upset plot data --------------------------------------------------------------
+
+rm(dt_liquid_24h, counts_liquid_24h, dt_max_liquid_agg, dt_max_liquid); gc()
+
+THRESHOLDS$score_name = str_remove_all(THRESHOLDS$score_name, "_total")
+
+upset = 
+  fsubset(scores_max_enc, ed_admit_01 == 1) |>
+  join(THRESHOLDS, how = "left", multiple = T) |>
+  ftransform(positive = if_else(max_value >= threshold, 1L, 0L)) |>
+  select(joined_hosp_id, ca_01, outcome, score_name, positive) |>
+  pivot_wider(names_from = score_name, values_from = positive)
+
+pooled_upset_counts = {
+  x =
+    fgroup_by(upset, ca_01, outcome, sirs, qsofa, mews, news) |>
+    fsummarise(n = fnobs(joined_hosp_id))
+  k = fsum(x$n < 5L)
+  message(k, " rows set to 5 (n < 5).")
+  x$n = pmax(x$n, 5L)
+  roworder(x, -n)
+}
+
+write_artifact(
+  df       = pooled_upset_counts,
+  analysis = "threshold",
+  artifact = "upset",
+  site     = site_lowercase,
+  strata   = "ca",
+  horizon  = NULL
+)
+
