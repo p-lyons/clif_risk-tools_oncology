@@ -134,7 +134,75 @@ vitals_list$spo2 =
       TRUE      ~ NA_integer_
     )
   ) |>
-  fselect(-val)
+  rename(spo2 = val)
+
+## sf ratio (mews_sf, pmid 32114753) -------------------------------------------
+
+### prepare fio2 from respiratory table ----------------------------------------
+
+resp = 
+  data_list[["respiratory_support"]] |>
+  dplyr::filter(hospitalization_id %in% cohort_hids) |>
+  dplyr::select(
+    hospitalization_id, 
+    time = recorded_dttm, 
+    device_category, 
+    lpm_set, 
+    fio2_set
+  ) |>
+  dplyr::filter(!is.na(lpm_set) | !is.na(fio2_set) | tolower(device_category) == "room air") |>
+  dplyr::collect() 
+
+resp$fio2_impute = case_when(
+  resp$lpm_set == 0 ~ 0.21,
+  resp$lpm_set <= 6 ~ 0.21 + (0.04*resp$lpm_set),
+  resp$lpm_set >  0 ~ 0.21 + (6*0.04) + ((resp$lpm_set - 6)*0.03),
+  TRUE              ~ NA_real_
+)
+
+resp$fio2 = case_when(
+  resp$fio2_set >= 0.21 & resp$fio2_set <= 1   ~ resp$fio2_set,
+  resp$fio2_set >= 21   & resp$fio2_set <= 100 ~ resp$fio2_set*0.01,
+  resp$fio2_impute >= 1                        ~ 1,
+  tolower(resp$device_category) == "room air"  ~ 0.21,
+  TRUE                                         ~ resp$fio2_impute
+)
+
+resp = 
+  join(resp, hid_jid_crosswalk, how = "inner", multiple = T) |>
+  fgroup_by(joined_hosp_id, time) |>
+  fsummarize(fio2 = fmax(fio2)) |>
+  roworder(joined_hosp_id, time)
+
+keep_ids = pull(vitals_list$spo2, joined_hosp_id)
+resp     = fsubset(resp, !is.na(fio2) & joined_hosp_id %in% keep_ids) 
+
+### sf based on 6h fio2 carryforward -------------------------------------------
+
+vitals_list$sf = 
+  fsubset(vitals_list$spo2, spo2 >= 0 & spo2 < 97) |>
+  join(resp, how = "full", multiple = F) |>
+  ftransform(tf = if_else(!is.na(fio2), time, as.POSIXct(NA))) |>
+  roworder(joined_hosp_id, time) |> 
+  fill(tf,   .direction = "down", .by = joined_hosp_id) |>
+  fill(fio2, .direction = "down", .by = joined_hosp_id) |>  
+  ftransform(hdf = as.numeric(difftime(time, tf), units = "hours")) |>
+  ftransform(f2  = if_else(hdf <= 6 & !is.na(hdf), fio2, NA_real_)) |>
+  ftransform(sf  = spo2/f2)
+
+### compute sf scores ----------------------------------------------------------
+
+vitals_list$sf = 
+  fsubset(vitals_list$sf, !is.na(spo2)) |>
+  ftransform(
+    mews_sf = case_when(
+      f2 == 0.21 ~ 0L,
+      sf <= 235  ~ 3L,
+      sf <= 315  ~ 2L,
+      TRUE       ~ 0L
+    )
+  ) |>
+  fselect(joined_hosp_id, time, mews_sf)
 
 # extract labs and assign score points -----------------------------------------
 
@@ -179,7 +247,7 @@ scores =
 
 if ("val" %in% names(scores)) scores <- select(scores, -val)
 
-rm(labs, vitals_list, get_each_vital); gc()
+rm(resp, labs, vitals_list, get_each_vital); gc()
 
 # carryforward (vs 4h, labs 12h) -----------------------------------------------
 
@@ -200,9 +268,7 @@ locf <- function(df, col, hours, id = "joined_hosp_id", tcol = "time") {
   
   df |>
     arrange(!!sym(id), !!sym(tcol)) |>
-    mutate(!!tstamp := if_else(!is.na(.data[[col]]),
-                               .data[[tcol]],
-                               as.POSIXct(NA_real_))) |>
+    mutate(!!tstamp := if_else(!is.na(.data[[col]]), .data[[tcol]], as.POSIXct(NA_real_))) |>
     fill(!!sym(tstamp), .direction = "down", .by = !!sym(id)) |>
     mutate(
       !!col := {
@@ -229,7 +295,8 @@ rm(score_cols, lab_cols, vital_cols, locf); gc()
 ## sirs preprep ----------------------------------------------------------------
 
 scores$sirs_rr = if_else(scores$sirs_rr == 1 | scores$sirs_co2 == 1, 1L, 0L)
-scores = select(scores, -sirs_co2)
+scores = fselect(scores, -sirs_co2, -spo2)
+scores = rename(scores, sf = mews_sf)
 
 ## all scores ------------------------------------------------------------------
 
@@ -244,6 +311,7 @@ scores[, qsofa_total := rowSums(.SD, na.rm = T), .SDcols = patterns("^qsofa_")]
 
 scores = 
   tidytable(scores) |>
+  ftransform(mews_sf_total = mews_total + sf) |>
   join(ward_times, how = "inner", multiple = T) |>
   fsubset(time >= in_dttm & time <= out_dttm) |>
   select(-hospitalization_id) |>
@@ -288,7 +356,7 @@ scores$ed_admit_01 = if_else(scores$joined_hosp_id %in% ed, 1L, 0L)
 
 write_parquet(scores, here("proj_tables", "scores_full.parquet"))
 
-rm(ward_times, outcomes, cancer); gc()
+rm(ward_times, outcomes, cancer, ed); gc()
 
 # go to 03
 
