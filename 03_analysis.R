@@ -1,34 +1,44 @@
+# constants --------------------------------------------------------------------
 
-# start main analysis script here
+THRESHOLDS = tidytable(
+  score_name = c("sirs_total", "qsofa_total", "mews_total", "news_total"),
+  threshold  = c(2L, 2L, 5L, 5L)
+)
 
-# setup ------------------------------------------------------------------------
+HORIZONS = c(12L, 24L)
+
+VARIANTS = c("main", "se_no_ed_req", "se_fullcode_only", "se_win0_96h", "se_one_enc_per_pt")
+
+.allowed = list(
+  main        = c("auc", "cm", "maxscores"),
+  threshold   = c("ever", "first", "cm", "comps", "leadtime"),
+  sensitivity = c("auc", "cm", "ever", "first", "comps", "leadtime", "maxscores", "indices", "counts"),
+  subgroups   = c("auc", "cm", "counts"),
+  horizon     = c("auc", "cm", "counts")
+)
+
+# helper functions -------------------------------------------------------------
+
+## make outcome for horizon analysis -------------------------------------------
+
+make_y = function(h_to_event, horizon) {
+  as.integer(!is.na(h_to_event) & h_to_event >= 0 & h_to_event <= horizon)
+}
 
 ## function to write files -----------------------------------------------------
 
-.allowed = list(
-  main        = c("auc","cm"),
-  threshold   = c("ever","first","cm","comps","leadtime"),
-  sensitivity = c("auc","cm","ever","first","comps","leadtime"),
-  subgroups   = c("auc","cm","counts"),
-  horizon     = c("auc","cm","counts")
-)
-
-### filename: {artifact}{_strata?}{_h{hrs}?}{-variant?}-{site}.csv -------------
-
-.build_filename <- function(artifact, site, strata = NULL, horizon = NULL, variant = NULL) {
+.build_filename = function(artifact, site, strata = NULL, horizon = NULL, variant = NULL) {
   stopifnot(nzchar(artifact), nzchar(site))
-  nm <- artifact
+  nm = artifact
   if (!is.null(strata)  && nzchar(strata))  nm = paste0(nm, "_", strata)
   if (!is.null(horizon) && nzchar(horizon)) nm = paste0(nm, "_h", horizon)
   if (!is.null(variant) && nzchar(variant)) nm = paste0(nm, "-", variant)
   paste0(nm, "-", site, ".csv")
 }
 
-### write CSV to proj_output/{analysis}/... ------------------------------------
-
-write_artifact <- function(df, analysis, artifact, site,
-                           strata = NULL, horizon = NULL, variant = NULL,
-                           root = "proj_output") {
+write_artifact = function(df, analysis, artifact, site,
+                          strata = NULL, horizon = NULL, variant = NULL,
+                          root = "proj_output") {
   stopifnot(analysis %in% names(.allowed), artifact %in% .allowed[[analysis]])
   dir = file.path(root, analysis)
   if (!dir.exists(dir)) dir.create(dir, recursive = TRUE, showWarnings = FALSE)
@@ -38,40 +48,83 @@ write_artifact <- function(df, analysis, artifact, site,
   path
 }
 
-# max score before outcome -----------------------------------------------------
+## deterministic one-encounter-per-patient sampler -----------------------------
 
-## get each encounter's maximal pre-outcome score ------------------------------
+sample_one_encounter_per_patient = function(enc_df) {
+  dt = as.data.table(enc_df)
+  set.seed(2025L)
+  dt[, .SD[sample(.N, 1L)], by = patient_id]$joined_hosp_id
+}
 
-scores_max = 
-  fgroup_by(scores, joined_hosp_id) |>
-  fsummarize(
-    sirs_max  = fmax(sirs_total),
-    qsofa_max = fmax(qsofa_total),
-    mews_max  = fmax(mews_total),
-    news_max  = fmax(news_total)
+## sample one observation per encounter (for bootstrapping) --------------------
+
+sample_one_idx = function(dt) {
+  dt[, .I[sample(.N, 1L)], by = joined_hosp_id]$V1
+}
+
+## materialize a variant view of scores_long_base ------------------------------
+
+materialize_variant = function(variant) {
+  dt = copy(scores_long_base)
+  
+  switch(
+    variant,
+    main = {
+      dt = dt[ed_admit_01 == 1L]
+    },
+    se_no_ed_req = {
+      dt = dt
+    },
+    se_fullcode_only = {
+      dt = dt[fullcode_01 == 1L]
+    },
+    se_win0_96h = {
+      dt = dt[h_from_admit >= 0 & h_from_admit <= 96]
+    },
+    se_one_enc_per_pt = {
+      enc_tbl   = funique(fselect(scores, joined_hosp_id, patient_id))
+      keep_encs = sample_one_encounter_per_patient(enc_tbl)
+      dt        = dt[joined_hosp_id %in% keep_encs]
+    },
+    stop("Unknown variant: ", variant)
   )
+  
+  dt[]
+}
 
-scores = join(scores, scores_max, how = "left", multiple = T) 
+## materialize variant view of encounter-level max scores ----------------------
 
-## data frame for primary analysis ---------------------------------------------
+materialize_variant_max = function(variant, scores_max_enc) {
+  dt = copy(scores_max_enc)
+  
+  switch(
+    variant,
+    main = {
+      dt = dt[ed_admit_01 == 1L]
+    },
+    se_no_ed_req = {
+      dt = dt
+    },
+    se_fullcode_only = {
+      dt = dt[fullcode_01 == 1L]
+    },
+    se_win0_96h = {
+      return(NULL)
+    },
+    se_one_enc_per_pt = {
+      enc_tbl   = dt[, .(patient_id, joined_hosp_id)]
+      keep_encs = sample_one_encounter_per_patient(enc_tbl)
+      dt        = dt[joined_hosp_id %in% keep_encs]
+    },
+    stop("Unknown variant: ", variant)
+  )
+  
+  as.data.table(dt)[]
+}
 
-main_out = 
-  select(scores, joined_hosp_id, ca_01, o_primary_01, ends_with("max")) |>
-  funique() |>
-  pivot_longer(
-    cols      = ends_with("max"),
-    names_to  = "score_name",
-    values_to = "value"
-  ) |>
-  ftransform(score_name = str_remove(score_name, "_max")) |>
-  fgroup_by(ca_01, o_primary_01, score_name, value) |>
-  fsummarize(n = fnobs(joined_hosp_id))
+## collapse small cells --------------------------------------------------------
 
-### ok to collapse a very small number of cells to prevent n < 5 ---------------
-
-#### collapsing function -------------------------------------------------------
-
-collapse_small <- function(dt, grpvars, val_var = "value", n_var = "n", thresh = 5, max_pct_collapse = 0.01) {
+collapse_small = function(dt, grpvars, val_var = "value", n_var = "n", thresh = 5, max_pct_collapse = 0.01) {
   
   dt          = as.data.table(dt)
   total_n     = sum(dt[[n_var]], na.rm = TRUE)
@@ -85,15 +138,15 @@ collapse_small <- function(dt, grpvars, val_var = "value", n_var = "n", thresh =
     
     for (i in seq_along(ns)) {
       if (ns[i] < thresh && i < length(ns)) {
-        collapsed_n <<- collapsed_n + ns[i]   # track collapsed counts
-        ns[i + 1] <- ns[i + 1] + ns[i]
-        keep[i]   <- FALSE
+        collapsed_n <<- collapsed_n + ns[i]
+        ns[i + 1] = ns[i + 1] + ns[i]
+        keep[i]   = FALSE
       }
     }
     if (length(ns) > 1L && ns[length(ns)] < thresh) {
       collapsed_n <<- collapsed_n + ns[length(ns)]
-      ns[length(ns) - 1L] <- ns[length(ns) - 1L] + ns[length(ns)]
-      keep[length(ns)]    <- FALSE
+      ns[length(ns) - 1L] = ns[length(ns) - 1L] + ns[length(ns)]
+      keep[length(ns)]    = FALSE
     }
     .(value = vals[keep], n = ns[keep])
   }, by = grpvars]
@@ -111,404 +164,279 @@ collapse_small <- function(dt, grpvars, val_var = "value", n_var = "n", thresh =
   dt_out
 }
 
-#### run collapsing function ---------------------------------------------------
+## horizon counts (non-bootstrapped) -------------------------------------------
 
-collapsed_out = 
-  collapse_small(
-    dt      = main_out,
-    grpvars = c("ca_01","o_primary_01","score_name"),
-    val_var = "value",
-    n_var   = "n",
-    thresh  = 5
-  ) |>
-  fmutate(site = site_lowercase)
+run_horizon_counts = function(dt, horizons, site_lowercase) {
+  counts_list = lapply(horizons, function(HH) {
+    dt[, outcome := make_y(h_to_event, HH)]
+    dt[, .(n = .N), by = .(score_name, ca_01, value, outcome)
+    ][, `:=`(site = site_lowercase, h = HH)]
+  })
+  
+  out = rbindlist(counts_list, use.names = TRUE)
+  
+  if (exists("collapse_small")) {
+    out = collapse_small(out, grpvars = c("h", "score_name", "ca_01", "outcome"))
+  }
+  out[]
+}
 
-write_artifact(
-  df       = collapsed_out,
-  analysis = "main",
-  artifact = "auc",
-  site     = site_lowercase,
-  strata   = "ca",
-  variant  = "counts"
-)
+## horizon counts (clustered bootstrapping) ------------------------------------
 
-rm(main_out, collapsed_out, scores_max); gc()
+run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 100L) {
+  set.seed(2025L)
+  boot_list = vector("list", B)
+  base_dt   = dt[, .(joined_hosp_id, score_name, ca_01, value, h_to_event)]
+  setkey(base_dt, joined_hosp_id)
+  
+  for (b in seq_len(B)) {
+    idx  = sample_one_idx(base_dt)
+    samp = base_dt[idx]
+    
+    counts_b = rbindlist(lapply(horizons, function(HH) {
+      samp[, outcome := make_y(h_to_event, HH)]
+      samp[, .(n = .N), by = .(score_name, ca_01, value, outcome)
+      ][, `:=`(site = site_lowercase, h = HH, iter = b)]
+    }), use.names = TRUE)
+    
+    boot_list[[b]] = counts_b
+    if (b %% 10 == 0) message("  Bootstrap iteration ", b, "/", B)
+  }
+  rbindlist(boot_list, use.names = TRUE)[]
+}
 
-## when does the max score occur? ----------------------------------------------
+## threshold confusion matrix per horizon --------------------------------------
 
-### sirs -----------------------------------------------------------------------
-# 
-# sirs = 
-#   select(scores, joined_hosp_id, time, starts_with("sirs")) |>
-#   fsubset(sirs_total == sirs_max) |>
-#   roworder(time) |>
-#   fgroup_by(joined_hosp_id) |> 
-#   ffirst()
-#   
-# ### qsofa -----------------------------------------------------------------------
-# 
-# qsofa = 
-#   select(scores, joined_hosp_id, time, starts_with("qsofa")) |>
-#   fsubset(qsofa_total == qsofa_max) |>
-#   roworder(time) |>
-#   fgroup_by(joined_hosp_id) |> 
-#   ffirst()
-# 
-# ### mews -----------------------------------------------------------------------
-# 
-# mews = 
-#   select(scores, joined_hosp_id, time, starts_with("mews")) |>
-#   fsubset(mews_total == mews_max) |>
-#   roworder(time) |>
-#   fgroup_by(joined_hosp_id) |> 
-#   ffirst()
-# 
-# ### news -----------------------------------------------------------------------
-# 
-# news = 
-#   select(scores, joined_hosp_id, time, starts_with("news")) |>
-#   fsubset(news_total == news_max) |>
-#   roworder(time) |>
-#   fgroup_by(joined_hosp_id) |> 
-#   ffirst()
+run_threshold_cm = function(dt, horizons, site_lowercase) {
+  setkey(THRESHOLDS, score_name)
+  
+  cm_list = lapply(horizons, function(HH) {
+    dt[, y := make_y(h_to_event, HH)]
+    merged = dt[THRESHOLDS, on = "score_name", nomatch = NULL]
+    merged[, pred := as.integer(value >= threshold)]
+    
+    merged[, .(
+      n_tp  = sum(pred == 1L & y == 1L, na.rm = TRUE),
+      n_fp  = sum(pred == 1L & y == 0L, na.rm = TRUE),
+      n_tn  = sum(pred == 0L & y == 0L, na.rm = TRUE),
+      n_fn  = sum(pred == 0L & y == 1L, na.rm = TRUE),
+      n_obs = .N
+    ), by = .(score_name, ca_01)
+    ][, `:=`(site = site_lowercase, h = HH)]
+  })
+  rbindlist(cm_list, use.names = TRUE)[]
+}
 
-############
+# create long-form base with precomputed time features -------------------------
 
-# threshold positivity ---------------------------------------------------------
-
-## establish threshold definitions ---------------------------------------------
-
-score_name = c("sirs_total","qsofa_total","mews_total","news_total")
-threshold  = c(2L, 2L, 5L, 5L)
-thresh_tbl = bind_cols(score_name = score_name, threshold = threshold)
-
-## first time, if any, crossing each threshold ---------------------------------
-
-scores_long = 
-  select(scores, joined_hosp_id, ca_01, o_primary_01, time, ends_with("total")) |>
+scores_long_base = 
+  select(scores, joined_hosp_id, ends_with("01"), ends_with("dttm"), time, ends_with("total")) |>
+  select(-outcome_nohospc_dttm, -end_dttm, -out_dttm) |>
   pivot_longer(
     cols      = ends_with("total"),
     names_to  = "score_name",
     values_to = "value"
-  ) 
+  ) |>
+  ftransform(h_to_event   = as.numeric(difftime(outcome_dttm, time,    units = "hours"))) |>
+  ftransform(h_from_admit = as.numeric(difftime(time,         in_dttm, units = "hours")))
 
-scores_thresh = 
-  join(scores_long, thresh_tbl, how = "left", multiple = T) |>
-  fsubset(value >= threshold) |>
+jp = select(cohort, patient_id, joined_hosp_id)
+fc = fsubset(cohort, tolower(initial_code_status) == "full") |> pull(joined_hosp_id)
+
+scores_long_base = 
+  join(scores_long_base, jp, how = "left", multiple = F) |>
+  ftransform(fullcode_01 = if_else(joined_hosp_id %in% fc, 1L, 0L)) |>
+  select(ends_with("id"), ends_with("01"), score_name, value, starts_with("h_"))
+
+setDTthreads(0)
+setDT(scores_long_base)
+setkey(scores_long_base, joined_hosp_id, patient_id)
+
+# encounter-level maximum scores (for main AUROC analysis) --------------------
+
+## add patient_id and h_from_admit to scores for downstream use ----------------
+
+scores = 
+  join(scores, jp, how = "left", multiple = FALSE) |>
+  ftransform(h_from_admit = as.numeric(difftime(time, in_dttm, units = "hours")))
+
+## create encounter-level max scores -------------------------------------------
+
+scores_max_enc = 
+  scores |>
+  fgroup_by(joined_hosp_id) |>
+  fsummarize(
+    patient_id  = ffirst(patient_id),
+    ca_01       = ffirst(ca_01),
+    ed_admit_01 = ffirst(ed_admit_01),
+    sirs_max    = fmax(sirs_total,  na.rm = TRUE),
+    qsofa_max   = fmax(qsofa_total, na.rm = TRUE),
+    mews_max    = fmax(mews_total,  na.rm = TRUE),
+    news_max    = fmax(news_total,  na.rm = TRUE),
+    outcome     = ffirst(o_primary_01)
+  ) |>
+  join(
+    fsubset(cohort, tolower(initial_code_status) == "full") |> 
+      fselect(joined_hosp_id) |> 
+      fmutate(fullcode_01 = 1L),
+    how = "left", multiple = FALSE
+  ) |>
+  ftransform(fullcode_01 = if_else(is.na(fullcode_01), 0L, fullcode_01)) |>
+  pivot_longer(
+    cols      = ends_with("max"),
+    names_to  = "score_name",
+    values_to = "max_value"
+  ) |>
+  ftransform(score_name = str_remove(score_name, "_max")) |>
+  ftransform(site = site_lowercase)
+
+# ever positive analysis (time to first threshold crossing) -------------------
+
+ever_positive = 
+  scores |>
+  fsubset(ed_admit_01 == 1) |>
+  pivot_longer(
+    cols      = ends_with("total"),
+    names_to  = "score_name",
+    values_to = "value"
+  ) |>
+  join(THRESHOLDS, how = "inner", multiple = FALSE) |>
+  ftransform(positive = value >= threshold) |>
+  fsubset(positive == TRUE) |>
   roworder(time) |>
   fgroup_by(joined_hosp_id, score_name) |>
-  ffirst() 
-
-## data for confusion matrix ---------------------------------------------------
-
-scores_long_thresh = 
-  join(scores_long, scores_thresh, how = "left", multiple = T) |>
-  fmutate(threshold = if_else(is.na(threshold), 0L, 1L)) |>
-  roworder(time) |>
-  fgroup_by(joined_hosp_id, score_name, threshold) |>
-  ffirst()
-
-thresh_counts = 
-  fgroup_by(scores_long_thresh, score_name, ca_01, o_primary_01) |>
   fsummarize(
-    n_pos = fsum(threshold),
-    n_tot = fnobs(joined_hosp_id)
-  ) |>
-  fmutate(site = site_lowercase)
+    time_to_positive_h = ffirst(h_from_admit),
+    first_positive_val = ffirst(value)
+  )
 
-### save and clean up ----------------------------------------------------------
+## add back encounters that never went positive --------------------------------
+
+all_encs = 
+  fsubset(cohort, ed_admit_01 == 1) |>
+  fselect(joined_hosp_id, ca_01)
+
+ever_positive_complete = 
+  tidyr::expand_grid(
+    joined_hosp_id = all_encs$joined_hosp_id,
+    score_name     = THRESHOLDS$score_name
+  ) |>
+  join(all_encs, how = "left", multiple = FALSE) |>
+  join(ever_positive, how = "left", multiple = FALSE) |>
+  ftransform(ever_positive = if_else(is.na(time_to_positive_h), 0L, 1L)) |>
+  ftransform(site = site_lowercase)
 
 write_artifact(
-  df       = thresh_counts,
-  analysis = "threshold",
-  artifact = "cm",
-  site     = site_lowercase,
-  strata   = "ca"
-)
-
-rm(threshold, thresh_counts, scores_long_thresh, scores_long); gc()
-
-## time to threshold -----------------------------------------------------------
-
-### add start and stop times to scores_thresh ----------------------------------
-
-thresh_tbl   = select(thresh_tbl, -threshold)
-score_thresh = select(scores_thresh, -value, -threshold)
-
-time_df = 
-  select(scores, joined_hosp_id, ca_01, in_dttm, end_dttm) |>
-  funique() |>
-  expand_grid(thresh_tbl) |>
-  join(score_thresh, how = "left", multiple = T) |>
-  fmutate(
-    t_event_h  = as.numeric(difftime(time, in_dttm), "hours"),
-    t_censor_h = pmin(as.numeric(difftime(end_dttm,  in_dttm), "hours"), 168),
-    event      = if_else(!is.na(t_event_h) & t_event_h <= t_censor_h & t_event_h <= 168, 1L, 0L),
-    t_event_h  = if_else(event == 1L, t_event_h, Inf),
-    key        = 1L
-  ) |>
-  select(joined_hosp_id, ca_01, score_name, event, t_event_h, t_censor_h, key)
-
-### time bins for x-axis -------------------------------------------------------
-
-edges = c(
-  seq(00L, 008L, 02L),      
-  seq(12L, 024L, 04L),   
-  seq(36L, 168L, 12L)  
-)
-
-bins = tidytable(
-  bin_id = seq_along(edges[-1]),
-  l      = edges[-length(edges)],
-  u      = edges[-1],
-  key    = 1L
-)
-
-### create shareable cif df ----------------------------------------------------
-
-life_counts = 
-  join(bins, time_df, how = "inner", multiple = T) |>
-  fmutate(
-    at_risk     = as.integer(t_event_h >= l & t_censor_h >= l),
-    n_event     = as.integer(event == 1L & t_event_h >= l & t_event_h < u),
-    n_discharge = as.integer(t_censor_h >= l & t_censor_h < u & t_censor_h < t_event_h)
-  ) |>
-  fgroup_by(score_name, ca_01, bin_id, l, u) |>
-  fsummarize(
-    n_risk      = fsum(at_risk),
-    n_event     = fsum(n_event),
-    n_discharge = fsum(n_discharge)
-  ) |>
-  roworder(score_name, ca_01, bin_id) |>
-  fmutate(site = site_lowercase)
-
-write_artifact(
-  df       = life_counts,
+  df       = ever_positive_complete,
   analysis = "threshold",
   artifact = "ever",
   site     = site_lowercase,
-  strata   = "ca",
-  variant  = "cif"
-)
-
-### summary stats for time to thresholds/outcomes ------------------------------
-
-time_to_thresh = 
-  select(scores, joined_hosp_id, in_dttm, outcome_dttm) |>
-  join(scores_thresh, how = "inner", multiple = T) |>
-  fmutate(time_to_threshold = as.numeric(difftime(time, in_dttm), "hours")) |> 
-  fmutate(time_to_outcome   = as.numeric(difftime(outcome_dttm, time), "hours")) |> 
-  select(joined_hosp_id, ca_01, o_primary_01, score_name, time_to_threshold, time_to_outcome)
-
-time_to_thresh = 
-  fgroup_by(time_to_thresh, score_name) |>
-  fsummarize(
-    n_thresh       = fnobs(time_to_threshold),
-    sum_thresh     = fsum(time_to_threshold),
-    sumsq_thresh   = fsum(time_to_threshold^2),
-    min_thresh     = fmin(time_to_threshold),
-    q25_thresh     = fquantile(time_to_threshold, 0.25),
-    median_thresh  = fmedian(time_to_threshold),
-    q75_thresh     = fquantile(time_to_threshold, 0.75),
-    max_thresh     = fmax(time_to_threshold),
-    n_outcome      = fnobs(time_to_outcome),
-    sum_outcome    = fsum(time_to_outcome),
-    sumsq_outcome  = fsum(time_to_outcome^2),
-    min_outcome    = fmin(time_to_outcome),
-    q25_outcome    = fquantile(time_to_outcome, 0.25),
-    median_outcome = fmedian(time_to_outcome),
-    q75_outcome    = fquantile(time_to_outcome, 0.75),
-    max_outcome    = fmax(time_to_outcome)
-  ) |>
-  fmutate(site = site_lowercase)
-
-write_artifact(
-  df       = time_to_thresh,
-  analysis = "threshold",
-  artifact = "leadtime",
-  site     = site_lowercase,
   strata   = "ca"
 )
 
-rm(time_to_thresh, life_counts, edges, bins, thresh_tbl, scores_thresh); gc()
+# run analyses across variants -------------------------------------------------
 
-# time based -------------------------------------------------------------------
-
-## determine whether outcome occurred in subsequent n hours from each time -----
-
-add_outcome_nh <- function(df, n) {
-  col = paste0("outcome_", n, "h")
-  mutate(df, !!col := if_else(as.numeric(difftime(outcome_dttm, time, units = "hours")) <= n, 1L, 0L, 0L))
+for (v in VARIANTS) {
+  message("\n== Variant: ", v, " ==")
+  
+  ## time-varying analyses -----------------------------------------------------
+  
+  dt_v = materialize_variant(v)
+  diag_tbl = dt_v[, .(
+    n_rows       = .N,
+    n_enc        = uniqueN(joined_hosp_id),
+    n_pat        = uniqueN(patient_id),
+    evt_rate_12h = mean(make_y(h_to_event, 12L), na.rm = TRUE),
+    evt_rate_24h = mean(make_y(h_to_event, 24L), na.rm = TRUE)
+  )]
+  print(diag_tbl)
+  
+  ### standard horizon counts (all observations) -------------------------------
+  
+  message("  Computing horizon counts...")
+  counts_by_point = run_horizon_counts(dt_v, HORIZONS, site_lowercase)
+  
+  for (HH in sort(unique(counts_by_point$h))) {
+    write_artifact(
+      df       = counts_by_point[h == HH],
+      analysis = if (v == "main") "horizon" else "sensitivity",
+      artifact = "counts",
+      site     = site_lowercase,
+      strata   = "ca",
+      horizon  = HH,
+      variant  = if (v == "main") NULL else v
+    )
+  }
+  
+  ### bootstrapped horizon counts (1 obs per encounter, 100 iterations) --------
+  
+  message("  Computing bootstrapped horizon counts...")
+  counts_boot = run_horizon_counts_bootstrap(dt_v, HORIZONS, site_lowercase, B = 100L)
+  
+  for (HH in HORIZONS) {
+    write_artifact(
+      df       = counts_boot[h == HH],
+      analysis = if (v == "main") "horizon" else "sensitivity",
+      artifact = "counts",
+      site     = site_lowercase,
+      strata   = "ca",
+      horizon  = HH,
+      variant  = if (v == "main") "boot" else paste0(v, "-boot")
+    )
+  }
+  
+  ### threshold confusion matrix per horizon -----------------------------------
+  
+  message("  Computing threshold confusion matrices...")
+  cm_thresh = run_threshold_cm(dt_v, HORIZONS, site_lowercase)
+  
+  for (HH in HORIZONS) {
+    write_artifact(
+      df       = cm_thresh[h == HH],
+      analysis = if (v == "main") "horizon" else "sensitivity",
+      artifact = "cm",
+      site     = site_lowercase,
+      strata   = "ca",
+      horizon  = HH,
+      variant  = if (v == "main") "thresh" else paste0("thresh-", v)
+    )
+  }
+  
+  ## encounter-level max score analyses ----------------------------------------
+  
+  dt_max = materialize_variant_max(v, scores_max_enc)
+  
+  if (!is.null(dt_max)) {
+    message("  Writing encounter-level max scores...")
+    write_artifact(
+      df       = dt_max,
+      analysis = if (v == "main") "main" else "sensitivity",
+      artifact = "maxscores",
+      site     = site_lowercase,
+      strata   = "ca",
+      variant  = if (v == "main") NULL else v
+    )
+  } else {
+    message("  Skipping encounter-level max scores (not applicable for this variant)")
+  }
+  
+  ## save encounter indices for reproducibility -------------------------------
+  
+  if (v == "se_one_enc_per_pt") {
+    idx_df = 
+      dt_v[, .(patient_id, joined_hosp_id)] |>
+      unique() |>
+      as_tidytable() |>
+      fmutate(variant = v, seed = 2025L)
+    
+    write_artifact(
+      df       = idx_df,
+      analysis = "sensitivity",
+      artifact = "indices",
+      site     = site_lowercase,
+      variant  = "indices-se_one_enc_per_pt"
+    )
+  }
 }
 
-df =
-  select(scores, joined_hosp_id, ca_01, time, ends_with("total"), outcome_dttm) |>
-  fsubset(time <= outcome_dttm | is.na(outcome_dttm)) |>
-  add_outcome_nh(06) |> 
-  add_outcome_nh(12) |> 
-  add_outcome_nh(24) 
-
-## put scores long -------------------------------------------------------------
-
-
-df_long =
-  funique(df) |>
-  # pivot outcomes into long
-  pivot_longer(
-    cols          = starts_with("outcome_"),
-    names_to      = "h",
-    names_pattern = "outcome_(\\d+)h",
-    values_to     = "outcome"
-  ) |>
-  # pivot predictors into long
-  pivot_longer(
-    cols      = ends_with("total"),
-    names_to  = "score",
-    values_to = "point"
-  ) |>
-  # make horizon an integer
-  fmutate(h = as.integer(h))
-
-rm(scores_long_h, outcomes_long_h); gc()
-
-## analyze time-dependent aurocs -----------------------------------------------
-
-### function for analysis ------------------------------------------------------
-
-analyze_time_series =
-  function(
-    data, 
-    predictors         = score_name, 
-    outcomes           = c("outcome_6h", "outcome_12h", "outcome_24h"),
-    se_target          = 0.6,
-    threshold_override = NULL, # named vector, e.g. c("esm_1" = 0.3, "esm_2" = 0.2)
-    ci_method          = "wilson" # method for binomial CIs
-  ) {
-    
-    # Helper function to calculate binomial confidence intervals
-    calc_binomial_ci = function(x, n, method = "wilson", conf_level = 0.95) {
-      if (n == 0) return(c(NA_real_, NA_real_))
-      
-      if (method == "wilson") {
-        # Wilson score interval
-        z = qnorm(1 - (1 - conf_level) / 2)
-        p = x / n
-        denom = 1 + z^2 / n
-        center = (p + z^2 / (2 * n)) / denom
-        margin = z * sqrt(p * (1 - p) / n + z^2 / (4 * n^2)) / denom
-        return(c(max(0, center - margin), min(1, center + margin)))
-      } else {
-        # Clopper-Pearson exact method
-        if (x == 0) {
-          lower = 0
-        } else {
-          lower = qbeta((1 - conf_level) / 2, x, n - x + 1)
-        }
-        
-        if (x == n) {
-          upper = 1
-        } else {
-          upper = qbeta(1 - (1 - conf_level) / 2, x + 1, n - x)
-        }
-        return(c(lower, upper))
-      }
-    }
-    
-    # All combinations of predictors and outcomes
-    analysis_grid = expand.grid(p = predictors, o = outcomes, stringsAsFactors = F)
-    
-    # Metrics for each combination
-    results = map_dfr(1:nrow(analysis_grid), function(i) {
-      
-      pred    = analysis_grid$p[i]
-      out     = analysis_grid$o[i]
-      roc_obj = roc(data[[out]], data[[pred]])
-      
-      if (!is.null(threshold_override) && pred %in% names(threshold_override)) {
-        best_thresh   = threshold_override[[pred]]
-        achieved_sens = coords(roc_obj, x = best_thresh, input = "threshold", ret = "sensitivity")
-      } else {
-        
-        # Thresholds at target sensitivity
-        thresh_data = coords(
-          roc_obj,
-          x         = "all",
-          ret       = c("threshold", "sensitivity"),
-          transpose = FALSE
-        ) |> 
-          as.data.frame()
-        
-        thresh_data   = thresh_data[order(abs(thresh_data$sensitivity - se_target)), ]
-        best_thresh   = thresh_data$threshold[1]
-        achieved_sens = thresh_data$sensitivity[1]
-      }
-      
-      pred_class    = if_else(data[[pred]] >= best_thresh, 1L, 0L)
-      cm            = table(data[[out]], pred_class)
-      
-      # Ensure 2x2 matrix
-      if(ncol(cm) == 1) {
-        missing_class = setdiff(c(0,1), colnames(cm))
-        cm            = cbind(cm, matrix(0, nrow = 2, ncol = 1, dimnames = list(NULL, missing_class)))
-      }
-      
-      # Calculate metrics
-      TP = cm["1", "1"]
-      TN = cm["0", "0"]
-      FP = cm["0", "1"]
-      FN = cm["1", "0"]
-      
-      # Calculate point estimates
-      sensitivity = TP / (TP + FN)
-      specificity = TN / (TN + FP)
-      ppv         = ifelse((TP + FP) > 0, TP / (TP + FP), NA_real_)
-      npv         = ifelse((TN + FN) > 0, TN / (TN + FN), NA_real_)
-      
-      # Calculate confidence intervals
-      sens_ci = calc_binomial_ci(TP, TP + FN, method = ci_method)
-      spec_ci = calc_binomial_ci(TN, TN + FP, method = ci_method)
-      ppv_ci  = if((TP + FP) > 0) calc_binomial_ci(TP, TP + FP, method = ci_method) else c(NA_real_, NA_real_)
-      npv_ci  = if((TN + FN) > 0) calc_binomial_ci(TN, TN + FN, method = ci_method) else c(NA_real_, NA_real_)
-      
-      tidytable(
-        predictor     = pred,
-        outcome       = out,
-        auc           = as.numeric(auc(roc_obj)),
-        auc_lci       = as.numeric(ci.auc(roc_obj)[1]),
-        auc_uci       = as.numeric(ci.auc(roc_obj)[3]),
-        sensitivity   = sensitivity,
-        sensitivity_lci = sens_ci[1],
-        sensitivity_uci = sens_ci[2],
-        specificity   = specificity,
-        specificity_lci = spec_ci[1],
-        specificity_uci = spec_ci[2],
-        ppv           = ppv,
-        ppv_lci       = ppv_ci[1],
-        ppv_uci       = ppv_ci[2],
-        npv           = npv,
-        npv_lci       = npv_ci[1],
-        npv_uci       = npv_ci[2],
-        threshold     = best_thresh,
-        thresh_src    = ifelse(!is.null(threshold_override) && pred %in% names(threshold_override), "override", "sensitivity_target")
-      )
-    })
-  }
-
-## run function to get results -------------------------------------------------
-
-thresholds = fread(here("output/performance_encounter-level_ohsu.csv"))
-t_esm1     = fsubset(thresholds, predictor == "esm1_max") |> pull(threshold_used)
-t_esm2     = fsubset(thresholds, predictor == "esm2_max") |> pull(threshold_used)
-
-time_results = 
-  analyze_time_series(
-    data               = df,
-    predictors         = score_name, #c("esm_1", "esm_2"),
-    outcomes           = c("outcome_6h", "outcome_12h", "outcome_24h"), #c("outcome_4h", "outcome_12h", "outcome_1860h"),
-    se_target          = 0.6,
-    threshold_override = c("esm_1" = t_esm1, "esm_2" = t_esm2),
-    ci_method          = "wilson"  # or "exact" for Clopper-Pearson
-  ) |>
-  select(-thresh_src) |>
-  fmutate(outcome = if_else(outcome == "outcome_1860h", "outcome_infinity", outcome))
-
+message("\n== All variants complete ==")
