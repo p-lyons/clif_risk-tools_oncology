@@ -21,9 +21,10 @@ packages_to_install =
     "readr", 
     "yaml",
     "here",
+    "pROC",
     "fst",
+    "zoo",
     "ps",
-    "pROC"
   )
 
 packages_to_load = 
@@ -34,8 +35,8 @@ packages_to_load =
     "stringr",
     "arrow",
     "here",
+    "pROC",
     "ps",
-    "pROC"
   )
 
 fn_install_if_mi = function(p) {
