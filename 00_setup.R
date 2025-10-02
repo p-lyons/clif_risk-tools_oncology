@@ -24,7 +24,7 @@ packages_to_install =
     "pROC",
     "fst",
     "zoo",
-    "ps",
+    "ps"
   )
 
 packages_to_load = 
@@ -36,7 +36,7 @@ packages_to_load =
     "arrow",
     "here",
     "pROC",
-    "ps",
+    "ps"
   )
 
 fn_install_if_mi = function(p) {
