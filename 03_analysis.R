@@ -1,8 +1,8 @@
 # constants --------------------------------------------------------------------
 
 THRESHOLDS = tidytable(
-  score_name = c("sirs_total", "qsofa_total", "mews_total", "news_total"),
-  threshold  = c(2L, 2L, 5L, 5L)
+  score_name = c("sirs_total", "qsofa_total", "mews_total", "news_total", "mews_sf_total"),
+  threshold  = c(2L, 2L, 5L, 5L, 7L)
 )
 
 HORIZONS = c(12L, 24L)
@@ -127,7 +127,7 @@ materialize_variant_max = function(variant, scores_max_enc) {
 
 aggregate_maxscores = function(dt, site_lowercase) {
   dt   = as.data.table(dt)
-  need = c("score_name","ca_01","max_value","outcome")
+  need = c("score_name", "ca_01", "max_value", "outcome")
   miss = setdiff(need, names(dt))
   if (length(miss)) stop("aggregate_maxscores(): missing cols: ", paste(miss, collapse=", "))
   dt[, .(n = .N), by = .(score_name, ca_01, max_value, outcome)
@@ -260,10 +260,11 @@ scores_max_enc =
     ca_01       = ffirst(ca_01),
     ed_admit_01 = ffirst(ed_admit_01),
     fullcode_01 = if_else(ffirst(joined_hosp_id) %in% fc, 1L, 0L),
-    sirs_max    = fmax(sirs_total,  na.rm = TRUE),
-    qsofa_max   = fmax(qsofa_total, na.rm = TRUE),
-    mews_max    = fmax(mews_total,  na.rm = TRUE),
-    news_max    = fmax(news_total,  na.rm = TRUE),
+    sirs_max    = fmax(sirs_total,    na.rm = TRUE),
+    qsofa_max   = fmax(qsofa_total,   na.rm = TRUE),
+    mews_max    = fmax(mews_total,    na.rm = TRUE),
+    news_max    = fmax(news_total,    na.rm = TRUE),
+    mews_sf_max = fmax(mews_sf_total, na.rm = TRUE),
     outcome     = ffirst(o_primary_01)
   ) |>
   pivot_longer(
@@ -305,7 +306,6 @@ ever_positive_complete =
     score_name     = THRESHOLDS$score_name
   ) |>
   tidytable::as_tidytable() |>
-  # explicit keys prevent ca_01.x / ca_01.y
   join(all_encs,      how = "left", multiple = FALSE) |>
   join(ever_positive, how = "left", multiple = FALSE) |>
   ftransform(ever_positive = as.integer(!is.na(time_to_positive_h))) |>
@@ -497,7 +497,7 @@ upset =
 
 pooled_upset_counts = {
   x =
-    fgroup_by(upset, ca_01, outcome, sirs, qsofa, mews, news) |>
+    fgroup_by(upset, ca_01, outcome, sirs, qsofa, mews, news, mews_sf) |>
     fsummarise(n = fnobs(joined_hosp_id))
   k = fsum(x$n < 5L)
   message(k, " rows set to 5 (n < 5).")
