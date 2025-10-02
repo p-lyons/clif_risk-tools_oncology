@@ -362,8 +362,9 @@ dx_enc =
     liquid_01_enc = ffirst(liquid_01)
   )
 
-cohort       = join(cohort, dx_enc,  how = "left", multiple = F)
-cohort$ca_01 = if_else(is.na(cohort$ca_icd10_enc), 0L, 1L)
+cohort           = join(cohort, dx_enc,  how = "left", multiple = F)
+cohort$ca_01     = if_else(is.na(cohort$ca_icd10_enc),  0L, 1L)
+cohort$liquid_01 = if_else(is.na(cohort$liquid_01_enc), 0L, cohort$liquid_01_enc)
 
 ### tally for inclusion flow diagram -------------------------------------------
 
