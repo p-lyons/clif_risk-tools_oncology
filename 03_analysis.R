@@ -126,11 +126,12 @@ materialize_variant_max = function(variant, scores_max_enc) {
 ## aggregate max scores to counts ----------------------------------------------
 
 aggregate_maxscores = function(dt, site_lowercase) {
-  dt |>
-    fgroup_by(score_name, ca_01, max_value, outcome) |>
-    fsummarize(n = n()) |>
-    ftransform(site = site_lowercase) |>
-    as.data.table()
+  dt   = as.data.table(dt)
+  need = c("score_name","ca_01","max_value","outcome")
+  miss = setdiff(need, names(dt))
+  if (length(miss)) stop("aggregate_maxscores(): missing cols: ", paste(miss, collapse=", "))
+  dt[, .(n = .N), by = .(score_name, ca_01, max_value, outcome)
+  ][, site := site_lowercase][]
 }
 
 ## collapse small cells --------------------------------------------------------
