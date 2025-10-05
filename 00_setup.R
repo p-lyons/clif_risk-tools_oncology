@@ -16,6 +16,7 @@ packages_to_install =
     "tidytable",
     "collapse",
     "janitor",
+    "glmmTMB",
     "readxl",
     "arrow",
     "rvest", 
