@@ -827,6 +827,58 @@ cohort =
     .fns  = ~if_else(is.na(.x), 0L, .x)
   ))
 
+## add elixhauser --------------------------------------------------------------
+
+### vector common codes to avoid for RAM's sake (to repl w/ keep list) ---------
+
+unused_vect = c(
+  "Z79.899",
+  "E78.5",
+  "Z87.891",
+  "K21.9",
+  "Z20.822",
+  "F17.210",
+  "Z79.01",
+  "N17.9"
+)
+
+### only relevant codes from relevant encounters -------------------------------
+
+elix = 
+  dplyr::filter(data_list$hospital_diagnosis, hospitalization_id %in% cohort_hids) |>
+  dplyr::filter(!toupper(diagnosis_code) %in% unused_vect) |>
+  dplyr::select(hospitalization_id, poa_present, diagnosis_code) |>
+  dplyr::collect() |>
+  funique()
+
+### assign elixhauser diagnosis dummies ----------------------------------------
+
+elix = 
+  comorbidity::comorbidity(
+    elix, 
+    id      = "hospitalization_id", 
+    code    = "diagnosis_code", 
+    map     = "elixhauser_icd10_quan", 
+    assign0 = T
+  )
+
+### link to joined-hosp-id -----------------------------------------------------
+
+elix = 
+  join(elix, hid_jid_crosswalk, how = "left", multiple = T) |>
+  fselect(-patient_id, -hospitalization_id) |>
+  fgroup_by(joined_hosp_id) |>
+  fmax()
+
+### calculate vw scores --------------------------------------------------------
+
+vw        = comorbidity::score(elix, weights = "vw", assign0 = T)
+elix      = cbind(elix, vw = vw) |> fselect(joined_hosp_id, vw)
+cohort    = join(cohort, elix, how = "left", multiple = F)
+cohort$vw = if_else(is.na(cohort$vw), 0L, cohort$vw)
+
+rm(elix, vw); gc()
+
 ### sanity check before saving -------------------------------------------------
 
 props = 
@@ -859,12 +911,14 @@ t2_cont =
   fgroup_by(ca_01) |>
   fsummarize(
     n         = fnobs(joined_hosp_id),
-    age_sum   = fsum(age,          na.rm = TRUE),
-    age_sumsq = fsum(age^2,        na.rm = TRUE),
+    age_sum   = fsum(age),
+    age_sumsq = fsum(age^2),
     age_p025  = fquantile(age, 0.025),
     age_p975  = fquantile(age, 0.975),
-    los_sum   = fsum(los_hosp_d,   na.rm = TRUE),
-    los_sumsq = fsum(los_hosp_d^2, na.rm = TRUE),
+    vw_sum    = fsum(vw),
+    vw_sumsq  = fsum(vw^2),
+    los_sum   = fsum(los_hosp_d),
+    los_sumsq = fsum(los_hosp_d^2),
     los_p025  = fquantile(los_hosp_d, 0.025),
     los_p975  = fquantile(los_hosp_d, 0.975)
   ) |>
@@ -889,6 +943,22 @@ ages_cat =
   ftransform(var = "age", category = str_remove(age_cat, "age_")) |>
   fselect(ca_01, var, category, n) 
 
+### elixhauser -----------------------------------------------------------------
+
+elix_breaks = c(-Inf,  0, 4,  9, 14,  Inf)
+elix_labs   = c("<= 0", "1-4", "5-9", "10-14", ">= 15")
+
+elix_cat = 
+  fsubset(cohort, ed_admit_01 == 1) |>
+  fselect(ca_01, vw) |>
+  fmutate(a = cut(vw, breaks = elix_breaks, labels = elix_labs, right = F)) |>
+  fgroup_by(ca_01, a) |>
+  fnobs() |>
+  select(ca_01, elix_cat = a, n = vw) |>
+  ftransform(elix_cat = paste0("vw_", elix_cat)) |>
+  ftransform(var = "vw", category = str_remove(elix_cat, "vw_")) |>
+  fselect(ca_01, var, category, n) 
+
 ### los (days) -----------------------------------------------------------------
 
 l_breaks = c( 0,        2,         4,         7,         14, Inf)
@@ -908,7 +978,7 @@ los_cat =
 
 t2_cat = 
   fsubset(cohort, ed_admit_01 == 1) |>
-  select(-ends_with("id"), -ends_with("dttm"),  -age, -los_hosp_d) |>
+  select(-ends_with("id"), -ends_with("dttm"),  -age, -vw, -los_hosp_d) |>
   pivot_longer(-ca_01, names_to = "var", values_to = "val") |>
   fsubset(!is.na(val)) |>
   fmutate(n = val) |>
@@ -923,10 +993,11 @@ t2_cat =
 ### check for small n in cells -------------------------------------------------
 
 ages_cat$site = site_lowercase
+elix_cat$site = site_lowercase
 los_cat$site  = site_lowercase
 t2_cat$site   = site_lowercase
 
-all_cat = rowbind(ages_cat, los_cat, t2_cat)
+all_cat = rowbind(ages_cat, elix_cat, los_cat, t2_cat)
 small_c = fsubset(all_cat, n < 5 & n > 0)
 
 if (nrow(small_c) > 0) {
