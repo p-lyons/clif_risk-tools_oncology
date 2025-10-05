@@ -388,9 +388,9 @@ for (v in VARIANTS) {
     message("  Writing encounter-level max scores...")
     dt_max_agg = aggregate_maxscores(dt_max, site_lowercase)
     
-  if (exists("collapse_small")) {
-    dt_max_agg = collapse_small(dt_max_agg, grpvars = c("score_name", "ca_01", "outcome"), val_var = "max_value")
-  }
+    if (exists("collapse_small")) {
+      dt_max_agg = collapse_small(dt_max_agg, grpvars = c("score_name", "ca_01", "outcome"), val_var = "max_value")
+    }
     
     write_artifact(
       df       = dt_max_agg,
@@ -416,11 +416,11 @@ message("\n== Cancer type subgroup analysis ==")
 liq = 
   fsubset(cohort, liquid_01 == 1) |>
   pull(joined_hosp_id)
-  
+
 ever_positive_complete = 
   fsubset(ever_positive_complete, ca_01 == 1) |>
   ftransform(liquid_01 = if_else(joined_hosp_id %in% liq, 1L, 0L))
-  
+
 scores_long_base = 
   fsubset(scores_long_base, ca_01 == 1 & ed_admit_01 == 1) |>
   ftransform(liquid_01 = if_else(joined_hosp_id %in% liq, 1L, 0L))
@@ -512,5 +512,83 @@ write_artifact(
   site     = site_lowercase,
   strata   = "ca",
   horizon  = NULL
+)
+
+# adjusted models for pooling --------------------------------------------------
+
+library(glmmTMB)
+
+df_model =
+  fsubset(dt_max, ed_admit_01 == 1) |>
+  select(-ed_admit_01, -fullcode_01)
+
+df_model$hospital_id = 1L
+
+rm(dt_v, ever_positive, ever_positive_agg, ever_positive_complete, counts_boot)
+rm(scores, score_long_base, dt_max, upset); gc()
+
+fit_one_score <- function(df,
+                          score,                      
+                          outcome_col      = "outcome",
+                          cancer_col       = "ca_01",
+                          hosp_col         = "hospital_id",
+                          score_name_col   = "score_name",
+                          max_value_col    = "max_value") {
+  
+  df_sub = df[df[[score_name_col]] == score, , drop = FALSE]
+  if (nrow(df_sub) == 0L) stop("No rows for score = ", score)
+  has_multi_hosp = fnunique(df_sub[[hosp_col]]) > 1
+  
+  f = if (has_multi_hosp) {
+    as.formula(paste0(outcome_col, " ~ ", max_value_col, " * ", cancer_col, " + (1|", hosp_col, ")"))
+  } else {
+    as.formula(paste0(outcome_col, " ~ ", max_value_col, " * ", cancer_col))
+  }
+  
+  fit = glmmTMB(
+    f, 
+    family  = binomial(), 
+    data    = df_sub,
+    control = glmmTMBControl(optimizer = optim, optArgs = list(method = "BFGS"))
+  )
+  
+  co = summary(fit)$coefficients$cond
+  
+  int_rows = grep(paste0("^", max_value_col, ":"), rownames(co), value = TRUE)
+  int_rows = int_rows[grepl(paste0("^", max_value_col, ":", cancer_col), int_rows)]
+  if (length(int_rows) != 1L) {
+    stop("Could not uniquely identify interaction term. Found: ", paste(int_rows, collapse = ", "))
+  }
+  
+  est    = co[int_rows, "Estimate"]
+  se     = co[int_rows, "Std. Error"]
+  n_used = nobs(fit)
+  
+  tidytable(
+    score       = score,
+    beta_int    = est,
+    se_int      = se,
+    site_n      = n_used,
+    n_events    = fsum(df_sub[[outcome_col]] == 1L, na.rm = TRUE),
+    n_hospitals = fnunique(df_sub[[hosp_col]]),
+    converged   = isTRUE(fit$fit$convergence == 0)
+  )
+}
+
+## run and save ----------------------------------------------------------------
+
+.allowed$meta = c("coefficients")
+scores_to_run = funique(df_model$score_name)
+
+site_fit_tbl = rbindlist(
+  lapply(scores_to_run, function(sc) fit_one_score(df_model, score = sc)),
+  use.names = TRUE, fill = TRUE
+)[, site := site_lowercase][]
+
+write_artifact(
+  df       = site_fit_tbl,
+  analysis = "meta",
+  artifact = "coefficients",
+  site     = site_lowercase
 )
 
