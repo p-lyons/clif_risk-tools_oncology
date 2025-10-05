@@ -121,7 +121,7 @@ message(
 
 config        = yaml::read_yaml(here("config", "config_clif_oncrisk.yaml"))
 site_details  = fread(here("config", "clif_sites.csv"))
-allowed_sites = site_details$site_name
+allowed_sites = tolower(site_details$site_name)
 allowed_files = c("parquet", "csv", "fst")
 
 ### user enters site details ---------------------------------------------------
@@ -143,7 +143,7 @@ if (!(site_lowercase %in% allowed_sites)) {
   )
 }
 
-### file_type must be one of c(parquet, csv) -----------------------------------
+### file_type must be one of c(parquet, csv, fst) ------------------------------
 
 if (!(file_type %in% allowed_files)) {
   stop(
@@ -245,6 +245,13 @@ names(data_list) = names(required_filenames)
 ### function to validate a table -----------------------------------------------
 ## validate table contents -----------------------------------------------------
 
+### case-insensitive column resolver -------------------------------------------
+
+.resolve <- function(tbl, v) {
+  nm = names(tbl)
+  nm[match(tolower(v), tolower(nm))]
+}
+
 ### function to validate a table -----------------------------------------------
 
 validate_table = function(tbl, table_name, req_vars = NULL, req_values = list()) {
@@ -252,14 +259,17 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
   if (is.null(req_vars)) req_vars = character(0)
   
   problems     = character()
-  missing_vars = setdiff(req_vars, names(tbl))
+  actual_names = tolower(names(tbl))
+  req_lower    = tolower(req_vars)
+  missing_vars = req_vars[!req_lower %in% actual_names]
   
   if (length(missing_vars)) {
     problems = c(problems, sprintf("Missing required vars: %s", paste(missing_vars, collapse = ", ")))
   }
   
   for (var in names(req_values)) {
-    if (!var %in% names(tbl)) {
+    resolved_var = .resolve(tbl, var)
+    if (is.na(resolved_var)) {
       problems = c(problems, sprintf("Missing '%s' needed for value checks.", var))
       next
     }
@@ -269,24 +279,24 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
       present_vals = character(0)
       tryCatch({
         value_counts =
-          dplyr::select(tbl, !!rlang::sym(var)) |>
-          dplyr::group_by(!!rlang::sym(var)) |>
+          dplyr::select(tbl, !!rlang::sym(resolved_var)) |>
+          dplyr::group_by(!!rlang::sym(resolved_var)) |>
           dplyr::summarize(n = dplyr::n()) |>
           dplyr::arrange(dplyr::desc(n)) |>
           dplyr::collect()
         if (nrow(value_counts) > 0) {
-          present_vals = na.omit(as.character(value_counts[[var]]))
+          present_vals = na.omit(as.character(value_counts[[resolved_var]]))
         }
       }, error = function(e) { })
       
       if (length(present_vals) == 0) {
         tryCatch({
           sample_data =
-            dplyr::select(tbl, !!rlang::sym(var)) |>
+            dplyr::select(tbl, !!rlang::sym(resolved_var)) |>
             utils::head(1000) |>
             dplyr::collect()
           if (nrow(sample_data) > 0) {
-            present_vals = na.omit(unique(as.character(sample_data[[var]])))
+            present_vals = na.omit(unique(as.character(sample_data[[resolved_var]])))
           }
         }, error = function(e) { })
       }
@@ -294,15 +304,15 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
       present_vals = character(0)
       tryCatch({
         distinct_vals = tbl |>
-          dplyr::select(!!rlang::sym(var)) |>
+          dplyr::select(!!rlang::sym(resolved_var)) |>
           dplyr::distinct() |>
           dplyr::collect()
         if (nrow(distinct_vals) > 0) {
-          present_vals = na.omit(as.character(distinct_vals[[var]]))
+          present_vals = na.omit(as.character(distinct_vals[[resolved_var]]))
         }
       }, error = function(e) { })
     } else {
-      present_vals = na.omit(unique(as.character(tbl[[var]])))
+      present_vals = na.omit(unique(as.character(tbl[[resolved_var]])))
     }
     
     present_vals  = tolower(trimws(as.character(present_vals)))
@@ -421,9 +431,7 @@ adt_list =
 dx_list = list(
   table_name = "hospital_diagnosis",
   req_vars   = c("hospitalization_id", "diagnosis_code", "diagnosis_code_format"),
-  req_values = list(
-    diagnosis_code_format = c("ICD10CM")
-  )
+  req_values = list(diagnosis_code_format = c("ICD10CM"))
 )
 
 med_list = 
