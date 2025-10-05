@@ -10,6 +10,7 @@
 
 packages_to_install =
   c(
+    "comorbidity",
     "data.table",
     "tidyverse",
     "tidytable",
