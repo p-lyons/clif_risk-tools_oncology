@@ -230,7 +230,7 @@ scores_long_base =
   ftransform(h_to_event   = as.numeric(difftime(outcome_dttm, time,    units = "hours"))) |>
   ftransform(h_from_admit = as.numeric(difftime(time,         in_dttm, units = "hours")))
 
-jp = select(cohort, patient_id, joined_hosp_id)
+jp = select(cohort, patient_id, joined_hosp_id, hospital_id)
 fc = fsubset(cohort, tolower(initial_code_status) == "full") |> pull(joined_hosp_id)
 
 scores_long_base = 
@@ -519,10 +519,14 @@ write_artifact(
 library(glmmTMB)
 
 df_model =
-  fsubset(dt_max, ed_admit_01 == 1) |>
-  select(-ed_admit_01, -fullcode_01)
-
-df_model$hospital_id = 1L
+  fsubset(scores_long_base, ed_admit_01 == 1) |>
+  fgroup_by(joined_hosp_id, score_name) |>
+  fsummarize(
+    hospital_id = ffirst(hospital_id),
+    ca_01       = fmax(ca_01), 
+    max_value   = fmax(value),
+    outcome     = fmax(outcome)
+  )
 
 rm(dt_v, ever_positive, ever_positive_agg, ever_positive_complete, counts_boot)
 rm(scores, score_long_base, dt_max, upset); gc()
