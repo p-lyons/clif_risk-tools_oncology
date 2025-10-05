@@ -879,7 +879,24 @@ cohort$vw = if_else(is.na(cohort$vw), 0L, cohort$vw)
 
 rm(elix, vw); gc()
 
-### sanity check before saving -------------------------------------------------
+## add hospital_id -------------------------------------------------------------
+
+hospital = 
+  dplyr::select(data_list$adt, hospitalization_id, in_dttm, hospital_id) |>
+  dplyr::filter(hospitalization_id %in% cohort_hids) |>
+  dplyr::collect()
+
+hospital = 
+  join(hospital, hid_jid_crosswalk, how = "left", multiple = T) |>
+  roworder(in_dttm) |>
+  fgroup_by(joined_hosp_id) |>
+  fsummarize(hospital_id = ffirst(hospital_id))
+
+cohort = join(cohort, hospital, how = "left", multiple = F)
+
+rm(hospital); gc()
+
+## sanity check before saving --------------------------------------------------
 
 props = 
   tidytable(
