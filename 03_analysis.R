@@ -1,3 +1,6 @@
+
+scores = read_parquet(here("proj_tables", "scores_full.parquet"))
+
 # constants --------------------------------------------------------------------
 
 THRESHOLDS = tidytable(
@@ -234,7 +237,7 @@ jp = select(cohort, patient_id, joined_hosp_id, hospital_id)
 fc = fsubset(cohort, tolower(initial_code_status) == "full") |> pull(joined_hosp_id)
 
 scores_long_base = 
-  join(scores_long_base, jp, how = "left", multiple = F) |>
+  join(scores_long_base, jp, how = "inner", multiple = F) |>
   ftransform(fullcode_01 = if_else(joined_hosp_id %in% fc, 1L, 0L)) |>
   select(ends_with("id"), ends_with("01"), score_name, value, starts_with("h_"))
 
@@ -247,7 +250,7 @@ setkey(scores_long_base, joined_hosp_id, patient_id)
 ## add patient_id and h_from_admit to scores for downstream use ----------------
 
 scores = 
-  join(scores, jp, how = "left", multiple = FALSE) |>
+  join(scores, jp, how = "inner", multiple = FALSE) |>
   ftransform(h_from_admit = as.numeric(difftime(time, in_dttm, units = "hours")))
 
 ## create encounter-level max scores -------------------------------------------
@@ -257,6 +260,7 @@ scores_max_enc =
   fgroup_by(joined_hosp_id) |>
   fsummarize(
     patient_id  = ffirst(patient_id),
+    hospital_id = ffirst(hospital_id),
     ca_01       = ffirst(ca_01),
     ed_admit_01 = ffirst(ed_admit_01),
     fullcode_01 = if_else(ffirst(joined_hosp_id) %in% fc, 1L, 0L),
@@ -482,54 +486,21 @@ write_artifact(
   horizon  = 24L
 )
 
-# upset plot data --------------------------------------------------------------
-
-rm(dt_liquid_24h, counts_liquid_24h, dt_max_liquid_agg, dt_max_liquid); gc()
-
-THRESHOLDS$score_name = str_remove_all(THRESHOLDS$score_name, "_total")
-
-upset = 
-  fsubset(scores_max_enc, ed_admit_01 == 1) |>
-  join(THRESHOLDS, how = "left", multiple = T) |>
-  ftransform(positive = if_else(max_value >= threshold, 1L, 0L)) |>
-  select(joined_hosp_id, ca_01, outcome, score_name, positive) |>
-  pivot_wider(names_from = score_name, values_from = positive)
-
-pooled_upset_counts = {
-  x =
-    fgroup_by(upset, ca_01, outcome, sirs, qsofa, mews, news, mews_sf) |>
-    fsummarise(n = fnobs(joined_hosp_id))
-  k = fsum(x$n < 5L)
-  message(k, " rows set to 5 (n < 5).")
-  x$n = pmax(x$n, 5L)
-  roworder(x, -n)
-}
-
-write_artifact(
-  df       = pooled_upset_counts,
-  analysis = "threshold",
-  artifact = "upset",
-  site     = site_lowercase,
-  strata   = "ca",
-  horizon  = NULL
-)
-
 # adjusted models for pooling --------------------------------------------------
 
 library(glmmTMB)
 
 df_model =
-  fsubset(scores_long_base, ed_admit_01 == 1) |>
+  fsubset(scores_max_enc, ed_admit_01 == 1) |>
   fgroup_by(joined_hosp_id, score_name) |>
   fsummarize(
     hospital_id = ffirst(hospital_id),
     ca_01       = fmax(ca_01), 
-    max_value   = fmax(value),
+    max_value   = fmax(max_value),
     outcome     = fmax(outcome)
   )
 
 rm(dt_v, ever_positive, ever_positive_agg, ever_positive_complete, counts_boot)
-rm(scores, score_long_base, dt_max, upset); gc()
 
 fit_one_score <- function(df,
                           score,                      
@@ -596,3 +567,34 @@ write_artifact(
   site     = site_lowercase
 )
 
+# upset plot data --------------------------------------------------------------
+
+rm(dt_liquid_24h, counts_liquid_24h, dt_max_liquid_agg, dt_max_liquid); gc()
+
+THRESHOLDS$score_name = str_remove_all(THRESHOLDS$score_name, "_total")
+
+upset = 
+  fsubset(scores_max_enc, ed_admit_01 == 1) |>
+  join(THRESHOLDS, how = "left", multiple = T) |>
+  ftransform(positive = if_else(max_value >= threshold, 1L, 0L)) |>
+  select(joined_hosp_id, ca_01, outcome, score_name, positive) |>
+  pivot_wider(names_from = score_name, values_from = positive)
+
+pooled_upset_counts = {
+  x =
+    fgroup_by(upset, ca_01, outcome, sirs, qsofa, mews, news, mews_sf) |>
+    fsummarise(n = fnobs(joined_hosp_id))
+  k = fsum(x$n < 5L)
+  message(k, " rows set to 5 (n < 5).")
+  x$n = pmax(x$n, 5L)
+  roworder(x, -n)
+}
+
+write_artifact(
+  df       = pooled_upset_counts,
+  analysis = "threshold",
+  artifact = "upset",
+  site     = site_lowercase,
+  strata   = "ca",
+  horizon  = NULL
+)
