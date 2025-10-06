@@ -194,7 +194,8 @@ required_tables =
     "labs", 
     "medication_admin_continuous", 
     "respiratory_support",
-    "code_status"
+    "code_status",
+    "patient_assessments"
   )
 
 ## check required tables against available tables ------------------------------
@@ -466,6 +467,13 @@ labs_list =
     req_values = list(lab_category = req_labs)
   )
 
+pa_list = 
+  list(
+    table_name = "patient_assessments",
+    req_vars   = c("assessment_category", "numerical_value", "recorded_dttm"),
+    req_values = list(assessment_category = "gcs_total")
+  )
+  
 validation_specs = list(
   patient_list, 
   hosp_list, 
@@ -474,7 +482,8 @@ validation_specs = list(
   med_list, 
   resp_list, 
   vitals_list, 
-  labs_list
+  labs_list,
+  pa_list
 )
 
 ## run validation functions ----------------------------------------------------
