@@ -121,6 +121,42 @@ vitals_list$sbp =
   ) |>
   fselect(-val)
 
+## gcs (qsofa) -----------------------------------------------------------------
+
+vitals_list$gcs = 
+  data_list[["patient_assessments"]] |>
+  dplyr::filter(hospitalization_id %in% cohort_hids) |>
+  dplyr::filter(assessment_category == "gcs_total") |>
+  dplyr::filter(!is.na(numerical_value) & numerical_value <= 15) |>
+  dplyr::select(
+    hospitalization_id, 
+    time = recorded_dttm, 
+    numerical_value
+  ) |>
+  dplyr::collect() |>
+  ftransform(
+    qsofa_gcs = if_else(numerical_value < 15, 1L, 0L, NA_integer_),
+    mews_gcs  = case_when(
+      numerical_value == 15 ~ 0L,
+      numerical_value >= 13 ~ 1L,
+      numerical_value >= 08 ~ 2L,
+      numerical_value >= 03 ~ 3L,
+      TRUE                  ~ NA_integer_
+    ),
+    news_gcs  = if_else(numerical_value < 15, 3L, 0L, NA_integer_)
+  ) |>
+  fselect(-numerical_value)
+
+vitals_list$gcs = 
+  join(vitals_list$gcs, hid_jid_crosswalk, how = "inner", multiple = T) |>
+  fgroup_by(joined_hosp_id, time) |>
+  fsummarize(
+    qsofa_gcs = fmax(qsofa_gcs),
+    mews_gcs  = fmax(mews_gcs),
+    news_gcs  = fmax(news_gcs)
+  ) |>
+  roworder(joined_hosp_id, time)
+
 ## spo2 (news) -----------------------------------------------------------------
 
 vitals_list$spo2 =
@@ -237,10 +273,10 @@ labs =
 scores = 
   Reduce(
     function(x, y) join(x, y,
-      on            = c("joined_hosp_id", "time"),
-      how           = "full",
-      multiple      = TRUE,
-      drop.dup.cols = TRUE
+                        on            = c("joined_hosp_id", "time"),
+                        how           = "full",
+                        multiple      = TRUE,
+                        drop.dup.cols = TRUE
     ),
     c(vitals_list, list(labs = labs))
   )
@@ -254,7 +290,7 @@ rm(resp, labs, vitals_list, get_each_vital); gc()
 ## set up locf parameters ------------------------------------------------------
 
 score_cols = setdiff(names(scores), c("joined_hosp_id","time"))
-lab_cols   = intersect(c("sirs_wbc","sirs_paco2","sirs_bands"), score_cols)
+lab_cols   = intersect(c("sirs_wbc","sirs_co2","sirs_bands"), score_cols)
 vital_cols = setdiff(score_cols, lab_cols)
 
 ## function for LOCF within N hours for one column -----------------------------
