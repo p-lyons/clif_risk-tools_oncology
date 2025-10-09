@@ -14,7 +14,7 @@ VARIANTS = c("main", "se_no_ed_req", "se_fullcode_only", "se_win0_120h", "se_one
 
 .allowed = list(
   main        = c("maxscores"),
-  threshold   = c("ever", "upset"),
+  threshold   = c("ever", "upset", "first"),
   sensitivity = c("maxscores", "counts"),
   horizon     = c("counts")
 )
@@ -183,7 +183,7 @@ collapse_small = function(dt, grpvars, val_var = "value", n_var = "n", thresh = 
 
 ensure_min_n = function(dt, n_var = "n", thresh = 5) {
   dt = as.data.table(dt)
-  k = fsum(dt[[n_var]] < thresh)
+  k = sum(dt[[n_var]] < thresh, na.rm = TRUE)
   if (k > 0) {
     message(sprintf("  Failsafe: %d cells with n < %d set to %d", k, thresh, thresh))
     dt[get(n_var) < thresh, (n_var) := thresh]
@@ -231,6 +231,146 @@ run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 100L) 
   }
   rbindlist(boot_list, use.names = TRUE)[]
 }
+
+# what factors drive positivity for each score? -------------------------------
+
+first_sirs = 
+  fsubset(scores, sirs_total >= 2L & ed_admit_01 == 1) |>
+  select(joined_hosp_id, ca_01, o_primary_01, h_from_admit, contains("sirs")) |>
+  roworder(h_from_admit) |>
+  fgroup_by(joined_hosp_id) |>
+  ffirst() |>
+  select(-contains("total")) |>
+  pivot_longer(
+    cols         = starts_with("sirs"),
+    names_to     = "component",
+    values_to    = "value",
+    names_prefix = "sirs_"
+  ) |>
+  ftransform(score = "sirs") |>
+  ftransform(threshold = 2L) |>
+  fsubset(value > 0)
+
+first_qsofa = 
+  fsubset(scores, qsofa_total >= 2L & ed_admit_01 == 1) |>
+  select(joined_hosp_id, ca_01, o_primary_01, h_from_admit, contains("qsof")) |>
+  roworder(h_from_admit) |>
+  fgroup_by(joined_hosp_id) |>
+  ffirst() |>
+  select(-contains("total")) |>
+  pivot_longer(
+    cols         = starts_with("qs"),
+    names_to     = "component",
+    values_to    = "value",
+    names_prefix = "qsofa_"
+  ) |>
+  ftransform(score = "qsofa") |>
+  ftransform(threshold = 2L) |>
+  fsubset(value > 0)
+
+first_mews = 
+  fsubset(scores, mews_total >= 5L & ed_admit_01 == 1) |>
+  select(joined_hosp_id, ca_01, o_primary_01, h_from_admit, contains("mews")) |>
+  roworder(h_from_admit) |>
+  fgroup_by(joined_hosp_id) |>
+  ffirst() |>
+  select(-contains("total")) |>
+  pivot_longer(
+    cols         = starts_with("mews"),
+    names_to     = "component",
+    values_to    = "value",
+    names_prefix = "mews_"
+  ) |>
+  ftransform(score = "mews") |>
+  ftransform(threshold = 5L) |>
+  fsubset(value > 0)
+
+first_mewssf = 
+  fsubset(scores, mews_sf_total >= 5L & ed_admit_01 == 1) |>
+  select(joined_hosp_id, ca_01, o_primary_01, h_from_admit, contains("mews"), sf) |>
+  roworder(h_from_admit) |>
+  fgroup_by(joined_hosp_id) |>
+  ffirst() |>
+  select(-contains("total")) |>
+  rename(mews_sf = sf) |>
+  pivot_longer(
+    cols         = starts_with("mews"),
+    names_to     = "component",
+    values_to    = "value",
+    names_prefix = "mews_"
+  ) |>
+  ftransform(score = "mews_sf") |>
+  ftransform(threshold = 5L) |>
+  fsubset(value > 0)
+
+first_news = 
+  fsubset(scores, news_total >= 7L & ed_admit_01 == 1) |>
+  select(joined_hosp_id, ca_01, o_primary_01, h_from_admit, contains("news")) |>
+  roworder(h_from_admit) |>
+  fgroup_by(joined_hosp_id) |>
+  ffirst() |>
+  select(-contains("total")) |>
+  pivot_longer(
+    cols         = starts_with("news"),
+    names_to     = "component",
+    values_to    = "value",
+    names_prefix = "news_"
+  ) |>
+  ftransform(score = "news") |>
+  ftransform(threshold = 7L) |>
+  fsubset(value > 0)
+
+firsts = 
+  rowbind(first_sirs, first_qsofa, first_mews, first_mewssf, first_news) |>
+  fselect(-threshold)
+
+time_to_positive = 
+  fselect(firsts, -component, -value) |>
+  funique() |>
+  ftransform(pos_day0 = if_else(h_from_admit <= 24, 1L, 0L)) |>
+  ftransform(pos_day1 = if_else(h_from_admit <= 48, 1L, 0L)) |>
+  ftransform(pos_day1 = if_else(pos_day0 == 1, 0L, pos_day1)) |>
+  fgroup_by(score, ca_01, o_primary_01) |>
+  fsummarize(
+    n                  = fnobs(joined_hosp_id),
+    h_from_admit_sum   = fsum(h_from_admit),
+    h_from_admit_sumsq = fsum(h_from_admit^2),
+    n_pos_day0         = fsum(pos_day0),
+    n_pos_day1         = fsum(pos_day1)
+  )
+
+write_artifact(
+  df       = ensure_min_n(time_to_positive),
+  analysis = "threshold",
+  artifact = "first",
+  site     = site_lowercase,
+  strata   = "ca_outcome_times",
+  horizon  = NULL
+)
+
+n_positive = 
+  fselect(firsts, joined_hosp_id, ca_01, o_primary_01, score) |>
+  funique() |>
+  fgroup_by(ca_01, o_primary_01, score) |>
+  fsummarize(n_encs = GRPN())
+
+contributors = 
+  fselect(firsts, -value, -h_from_admit) |>
+  join(n_positive, how = "left", multiple = T) |>
+  fgroup_by(ca_01, o_primary_01, score, component) |>
+  fsummarize(
+    n = GRPN(),
+    n_encs = fmax(n_encs)
+  )
+
+write_artifact(
+  df       = ensure_min_n(contributors),
+  analysis = "threshold",
+  artifact = "upset",
+  site     = site_lowercase,
+  strata   = "components",
+  horizon  = NULL
+)
 
 # create long-form base with precomputed time features -------------------------
 
@@ -582,6 +722,8 @@ write_artifact(
 # upset plot data --------------------------------------------------------------
 
 rm(dt_liquid_24h, counts_liquid_24h, dt_max_liquid_agg, dt_max_liquid); gc()
+
+## overlap of score positivity, encounter-level --------------------------------
 
 THRESHOLDS$score_name = str_remove_all(THRESHOLDS$score_name, "_total")
 
