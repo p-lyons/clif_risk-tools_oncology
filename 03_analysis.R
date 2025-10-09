@@ -179,6 +179,18 @@ collapse_small = function(dt, grpvars, val_var = "value", n_var = "n", thresh = 
   dt_out
 }
 
+## failsafe: ensure no cells with n < 5 ----------------------------------------
+
+ensure_min_n = function(dt, n_var = "n", thresh = 5) {
+  dt = as.data.table(dt)
+  k = fsum(dt[[n_var]] < thresh)
+  if (k > 0) {
+    message(sprintf("  Failsafe: %d cells with n < %d set to %d", k, thresh, thresh))
+    dt[get(n_var) < thresh, (n_var) := thresh]
+  }
+  dt[]
+}
+
 ## horizon counts (non-bootstrapped) -------------------------------------------
 
 run_horizon_counts = function(dt, horizons, site_lowercase) {
@@ -326,7 +338,7 @@ ever_positive_agg =
   ][, site := site_lowercase][]
 
 write_artifact(
-  df       = ever_positive_agg,
+  df       = ensure_min_n(ever_positive_agg),
   analysis = "threshold",
   artifact = "ever",
   site     = site_lowercase,
@@ -357,7 +369,7 @@ for (v in VARIANTS) {
   
   for (HH in sort(unique(counts_by_point$h))) {
     write_artifact(
-      df       = counts_by_point[h == HH],
+      df       = ensure_min_n(counts_by_point[h == HH]),
       analysis = if (v == "main") "horizon" else "sensitivity",
       artifact = "counts",
       site     = site_lowercase,
@@ -374,7 +386,7 @@ for (v in VARIANTS) {
   
   for (HH in HORIZONS) {
     write_artifact(
-      df       = counts_boot[h == HH],
+      df       = ensure_min_n(counts_boot[h == HH]),
       analysis = if (v == "main") "horizon" else "sensitivity",
       artifact = "counts",
       site     = site_lowercase,
@@ -397,7 +409,7 @@ for (v in VARIANTS) {
     }
     
     write_artifact(
-      df       = dt_max_agg,
+      df       = ensure_min_n(dt_max_agg),
       analysis = if (v == "main") "main" else "sensitivity",
       artifact = "maxscores",
       site     = site_lowercase,
@@ -450,7 +462,7 @@ if (exists("collapse_small")) {
 }
 
 write_artifact(
-  df       = dt_max_liquid_agg,
+  df       = ensure_min_n(dt_max_liquid_agg),
   analysis = "main",
   artifact = "maxscores",
   site     = site_lowercase,
@@ -478,7 +490,7 @@ if (exists("collapse_small")) {
 }
 
 write_artifact(
-  df       = counts_liquid_24h,
+  df       = ensure_min_n(counts_liquid_24h),
   analysis = "horizon",
   artifact = "counts",
   site     = site_lowercase,
@@ -561,7 +573,7 @@ site_fit_tbl = rbindlist(
 )[, site := site_lowercase][]
 
 write_artifact(
-  df       = site_fit_tbl,
+  df       = ensure_min_n(site_fit_tbl),
   analysis = "meta",
   artifact = "coefficients",
   site     = site_lowercase
@@ -591,7 +603,7 @@ pooled_upset_counts = {
 }
 
 write_artifact(
-  df       = pooled_upset_counts,
+  df       = ensure_min_n(pooled_upset_counts),
   analysis = "threshold",
   artifact = "upset",
   site     = site_lowercase,
