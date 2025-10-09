@@ -232,6 +232,119 @@ run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 100L) 
   rbindlist(boot_list, use.names = TRUE)[]
 }
 
+# create long-form base with precomputed time features -------------------------
+
+scores_long_base = 
+  select(scores, joined_hosp_id, ends_with("01"), ends_with("dttm"), time, ends_with("total")) |>
+  select(-outcome_nohospc_dttm, -end_dttm, -out_dttm) |>
+  pivot_longer(
+    cols      = ends_with("total"),
+    names_to  = "score_name",
+    values_to = "value"
+  ) |>
+  ftransform(h_to_event   = as.numeric(difftime(outcome_dttm, time,    units = "hours"))) |>
+  ftransform(h_from_admit = as.numeric(difftime(time,         in_dttm, units = "hours")))
+
+jp = select(cohort, patient_id, joined_hosp_id, hospital_id)
+fc = fsubset(cohort, tolower(initial_code_status) == "full") |> pull(joined_hosp_id)
+
+scores_long_base = 
+  join(scores_long_base, jp, how = "inner", multiple = F) |>
+  ftransform(fullcode_01 = if_else(joined_hosp_id %in% fc, 1L, 0L)) |>
+  select(ends_with("id"), ends_with("01"), score_name, value, starts_with("h_"))
+
+setDTthreads(0)
+setDT(scores_long_base)
+setkey(scores_long_base, joined_hosp_id, patient_id)
+
+# encounter-level maximum scores (for main AUROC analysis) --------------------
+
+## add patient_id and h_from_admit to scores for downstream use ----------------
+
+scores = 
+  join(scores, jp, how = "inner", multiple = FALSE) |>
+  ftransform(h_from_admit = as.numeric(difftime(time, in_dttm, units = "hours")))
+
+## create encounter-level max scores -------------------------------------------
+
+scores_max_enc = 
+  scores |>
+  fgroup_by(joined_hosp_id) |>
+  fsummarize(
+    patient_id  = ffirst(patient_id),
+    hospital_id = ffirst(hospital_id),
+    ca_01       = ffirst(ca_01),
+    ed_admit_01 = ffirst(ed_admit_01),
+    fullcode_01 = if_else(ffirst(joined_hosp_id) %in% fc, 1L, 0L),
+    sirs_max    = fmax(sirs_total,    na.rm = TRUE),
+    qsofa_max   = fmax(qsofa_total,   na.rm = TRUE),
+    mews_max    = fmax(mews_total,    na.rm = TRUE),
+    news_max    = fmax(news_total,    na.rm = TRUE),
+    mews_sf_max = fmax(mews_sf_total, na.rm = TRUE),
+    outcome     = ffirst(o_primary_01)
+  ) |>
+  pivot_longer(
+    cols      = ends_with("max"),
+    names_to  = "score_name",
+    values_to = "max_value"
+  ) |>
+  ftransform(score_name = str_remove(score_name, "_max"))
+
+# ever positive analysis (time to first threshold crossing) -------------------
+
+ever_positive = 
+  scores |>
+  fsubset(ed_admit_01 == 1) |>
+  pivot_longer(
+    cols      = ends_with("total"),
+    names_to  = "score_name",
+    values_to = "value"
+  ) |>
+  join(THRESHOLDS, how = "inner", multiple = FALSE) |>
+  ftransform(positive = value >= threshold) |>
+  fsubset(positive == TRUE) |>
+  roworder(time) |>
+  fgroup_by(joined_hosp_id, score_name) |>
+  fsummarize(
+    time_to_positive_h = ffirst(h_from_admit),
+    first_positive_val = ffirst(value)
+  )
+
+## add back encounters that never went positive --------------------------------
+
+all_encs = 
+  fsubset(cohort, ed_admit_01 == 1) |>
+  fselect(joined_hosp_id, ca_01)
+
+ever_positive_complete =
+  tidyr::expand_grid(
+    joined_hosp_id = all_encs$joined_hosp_id,
+    score_name     = THRESHOLDS$score_name
+  ) |>
+  tidytable::as_tidytable() |>
+  join(all_encs,      how = "left", multiple = FALSE) |>
+  join(ever_positive, how = "left", multiple = FALSE) |>
+  ftransform(ever_positive = as.integer(!is.na(time_to_positive_h))) |>
+  fselect(joined_hosp_id, score_name, ca_01, ever_positive)
+
+# sanity check
+stopifnot(all(c("score_name","ca_01","ever_positive") %chin% names(ever_positive_complete)))
+
+## aggregate to counts (no identifiers) ----------------------------------------
+
+ever_positive_agg =
+  as.data.table(ever_positive_complete)[
+    , .(n = .N), by = .(score_name, ca_01, ever_positive)
+  ][, site := site_lowercase][]
+
+write_artifact(
+  df       = ensure_min_n(ever_positive_agg),
+  analysis = "threshold",
+  artifact = "ever",
+  site     = site_lowercase,
+  strata   = "ca"
+)
+
 # what factors drive positivity for each score? -------------------------------
 
 first_sirs = 
@@ -370,119 +483,6 @@ write_artifact(
   site     = site_lowercase,
   strata   = "components",
   horizon  = NULL
-)
-
-# create long-form base with precomputed time features -------------------------
-
-scores_long_base = 
-  select(scores, joined_hosp_id, ends_with("01"), ends_with("dttm"), time, ends_with("total")) |>
-  select(-outcome_nohospc_dttm, -end_dttm, -out_dttm) |>
-  pivot_longer(
-    cols      = ends_with("total"),
-    names_to  = "score_name",
-    values_to = "value"
-  ) |>
-  ftransform(h_to_event   = as.numeric(difftime(outcome_dttm, time,    units = "hours"))) |>
-  ftransform(h_from_admit = as.numeric(difftime(time,         in_dttm, units = "hours")))
-
-jp = select(cohort, patient_id, joined_hosp_id, hospital_id)
-fc = fsubset(cohort, tolower(initial_code_status) == "full") |> pull(joined_hosp_id)
-
-scores_long_base = 
-  join(scores_long_base, jp, how = "inner", multiple = F) |>
-  ftransform(fullcode_01 = if_else(joined_hosp_id %in% fc, 1L, 0L)) |>
-  select(ends_with("id"), ends_with("01"), score_name, value, starts_with("h_"))
-
-setDTthreads(0)
-setDT(scores_long_base)
-setkey(scores_long_base, joined_hosp_id, patient_id)
-
-# encounter-level maximum scores (for main AUROC analysis) --------------------
-
-## add patient_id and h_from_admit to scores for downstream use ----------------
-
-scores = 
-  join(scores, jp, how = "inner", multiple = FALSE) |>
-  ftransform(h_from_admit = as.numeric(difftime(time, in_dttm, units = "hours")))
-
-## create encounter-level max scores -------------------------------------------
-
-scores_max_enc = 
-  scores |>
-  fgroup_by(joined_hosp_id) |>
-  fsummarize(
-    patient_id  = ffirst(patient_id),
-    hospital_id = ffirst(hospital_id),
-    ca_01       = ffirst(ca_01),
-    ed_admit_01 = ffirst(ed_admit_01),
-    fullcode_01 = if_else(ffirst(joined_hosp_id) %in% fc, 1L, 0L),
-    sirs_max    = fmax(sirs_total,    na.rm = TRUE),
-    qsofa_max   = fmax(qsofa_total,   na.rm = TRUE),
-    mews_max    = fmax(mews_total,    na.rm = TRUE),
-    news_max    = fmax(news_total,    na.rm = TRUE),
-    mews_sf_max = fmax(mews_sf_total, na.rm = TRUE),
-    outcome     = ffirst(o_primary_01)
-  ) |>
-  pivot_longer(
-    cols      = ends_with("max"),
-    names_to  = "score_name",
-    values_to = "max_value"
-  ) |>
-  ftransform(score_name = str_remove(score_name, "_max"))
-
-# ever positive analysis (time to first threshold crossing) -------------------
-
-ever_positive = 
-  scores |>
-  fsubset(ed_admit_01 == 1) |>
-  pivot_longer(
-    cols      = ends_with("total"),
-    names_to  = "score_name",
-    values_to = "value"
-  ) |>
-  join(THRESHOLDS, how = "inner", multiple = FALSE) |>
-  ftransform(positive = value >= threshold) |>
-  fsubset(positive == TRUE) |>
-  roworder(time) |>
-  fgroup_by(joined_hosp_id, score_name) |>
-  fsummarize(
-    time_to_positive_h = ffirst(h_from_admit),
-    first_positive_val = ffirst(value)
-  )
-
-## add back encounters that never went positive --------------------------------
-
-all_encs = 
-  fsubset(cohort, ed_admit_01 == 1) |>
-  fselect(joined_hosp_id, ca_01)
-
-ever_positive_complete =
-  tidyr::expand_grid(
-    joined_hosp_id = all_encs$joined_hosp_id,
-    score_name     = THRESHOLDS$score_name
-  ) |>
-  tidytable::as_tidytable() |>
-  join(all_encs,      how = "left", multiple = FALSE) |>
-  join(ever_positive, how = "left", multiple = FALSE) |>
-  ftransform(ever_positive = as.integer(!is.na(time_to_positive_h))) |>
-  fselect(joined_hosp_id, score_name, ca_01, ever_positive)
-
-# sanity check
-stopifnot(all(c("score_name","ca_01","ever_positive") %chin% names(ever_positive_complete)))
-
-## aggregate to counts (no identifiers) ----------------------------------------
-
-ever_positive_agg =
-  as.data.table(ever_positive_complete)[
-    , .(n = .N), by = .(score_name, ca_01, ever_positive)
-  ][, site := site_lowercase][]
-
-write_artifact(
-  df       = ensure_min_n(ever_positive_agg),
-  analysis = "threshold",
-  artifact = "ever",
-  site     = site_lowercase,
-  strata   = "ca"
 )
 
 # run analyses across variants -------------------------------------------------
