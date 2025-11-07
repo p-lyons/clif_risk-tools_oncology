@@ -292,7 +292,8 @@ ca_codes =
   janitor::clean_names() |>
   fsubset(general_category %in% c("Hematopoietic neoplasm", "Malignant neoplasm")) |>
   fsubset(is.na(drop) | drop != "drop") |>
-  fsubset(!str_detect(icd_10_cm_code_definition, "in remission")) |>
+  fsubset(!str_detect(icd_10_cm_code_specific, "^Z85")) |>
+  fsubset(!str_detect(icd_10_cm_code_definition, "in remission|personal history")) |>
   fmutate(liquid_01 = if_else(general_category == "Hematopoietic neoplasm", 1L, 0L)) |>
   select(diagnosis_code = icd_10_cm_code_specific, liquid_01)
 
@@ -359,12 +360,40 @@ dx_enc =
   fgroup_by(joined_hosp_id) |>
   fsummarize(
     ca_icd10_enc  = ffirst(diagnosis_code),
-    liquid_01_enc = ffirst(liquid_01)
+    liquid_01_enc = ffirst(liquid_01),
+    rank_enc      = ffirst(rank)
   )
 
 cohort           = join(cohort, dx_enc,  how = "left", multiple = F)
 cohort$ca_01     = if_else(is.na(cohort$ca_icd10_enc),  0L, 1L)
 cohort$liquid_01 = if_else(is.na(cohort$liquid_01_enc), 0L, cohort$liquid_01_enc)
+
+### tally cancer codes (all dx per hospitalization) ----------------------------
+
+# cancer_code_tally_all = 
+#   count(dx, diagnosis_code, liquid_01, rank) |>
+#   roworder(-n) |>
+#   ftransform(site = site_lowercase)
+# 
+# fwrite(
+#   cancer_code_tally_all,
+#   here("proj_output", paste0("cancer_codes_all_", site_lowercase, ".csv"))
+# )
+
+### tally primary cancer codes (one per encounter using priority) --------------
+
+cancer_code_tally_primary = 
+  fgroup_by(dx_enc, ca_icd10_enc) |>
+  fnobs() |> 
+  fselect(ca_icd10_enc, n = joined_hosp_id) |>
+  fsubset(n > 5) |>
+  roworder(-n) |>
+  ftransform(site = site_lowercase)
+
+fwrite(
+  cancer_code_tally_primary,
+  here("proj_output", paste0("cancer_codes_primary_", site_lowercase, ".csv"))
+)
 
 ### tally for inclusion flow diagram -------------------------------------------
 
