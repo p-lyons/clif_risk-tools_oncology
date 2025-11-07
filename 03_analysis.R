@@ -740,13 +740,13 @@ write_artifact(
 ## get score standard deviations for meta-analysis -----------------------------
 
 score_sds =  
-  fgroup_by(df_model, score_name) |>
-  fsummarize(
-    sd_score     = fsd(max_value),
-    mean_score   = fmean(max_value),
-    n_encounters = fn(max_value)
+  group_by(df_model, score_name) |>
+  summarize(
+    sd_score     = sd(max_value, na.rm = T),
+    mean_score   = mean(max_value, na.rm = T),
+    n_encounters = n(max_value)
   ) |>
-  frename(score = score_name) |>
+  rename(score = score_name) |>
   ftransform(site = site_lowercase)
 
 .allowed$meta = c("coefficients", "score_sds")
