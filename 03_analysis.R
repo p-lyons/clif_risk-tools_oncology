@@ -128,13 +128,14 @@ materialize_variant_max = function(variant, scores_max_enc) {
 
 ## aggregate max scores to counts ----------------------------------------------
 
-aggregate_maxscores = function(dt, site_lowercase) {
-  dt   = as.data.table(dt)
+aggregate_maxscores = function(dt, site_lowercase, analysis = "main") {
+  dt = as.data.table(dt)
   need = c("score_name", "ca_01", "max_value", "outcome")
   miss = setdiff(need, names(dt))
   if (length(miss)) stop("aggregate_maxscores(): missing cols: ", paste(miss, collapse=", "))
+  
   dt[, .(n = .N), by = .(score_name, ca_01, max_value, outcome)
-  ][, site := site_lowercase][]
+  ][, `:=`(site = site_lowercase, analysis = analysis)][]
 }
 
 ## collapse small cells --------------------------------------------------------
@@ -193,11 +194,11 @@ ensure_min_n = function(dt, n_var = "n", thresh = 5) {
 
 ## horizon counts (non-bootstrapped) -------------------------------------------
 
-run_horizon_counts = function(dt, horizons, site_lowercase) {
+run_horizon_counts = function(dt, horizons, site_lowercase, analysis = "main") {
   counts_list = lapply(horizons, function(HH) {
     dt[, outcome := make_y(h_to_event, HH)]
     dt[, .(n = .N), by = .(score_name, ca_01, value, outcome)
-    ][, `:=`(site = site_lowercase, h = HH)]
+    ][, `:=`(site = site_lowercase, analysis = analysis, h = HH)]
   })
   
   out = rbindlist(counts_list, use.names = TRUE)
@@ -210,20 +211,20 @@ run_horizon_counts = function(dt, horizons, site_lowercase) {
 
 ## horizon counts (clustered bootstrapping) ------------------------------------
 
-run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 100L) {
+run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, analysis = "main", B = 100L) {
   set.seed(2025L)
   boot_list = vector("list", B)
-  base_dt   = dt[, .(joined_hosp_id, score_name, ca_01, value, h_to_event)]
+  base_dt = dt[, .(joined_hosp_id, score_name, ca_01, value, h_to_event)]
   setkey(base_dt, joined_hosp_id)
   
   for (b in seq_len(B)) {
-    idx  = sample_one_idx(base_dt)
+    idx = sample_one_idx(base_dt)
     samp = base_dt[idx]
     
     counts_b = rbindlist(lapply(horizons, function(HH) {
       samp[, outcome := make_y(h_to_event, HH)]
       samp[, .(n = .N), by = .(score_name, ca_01, value, outcome)
-      ][, `:=`(site = site_lowercase, h = HH, iter = b)]
+      ][, `:=`(site = site_lowercase, analysis = analysis, h = HH, iter = b)]
     }), use.names = TRUE)
     
     boot_list[[b]] = counts_b
@@ -505,7 +506,12 @@ for (v in VARIANTS) {
   ### standard horizon counts (all observations) -------------------------------
   
   message("  Computing horizon counts...")
-  counts_by_point = run_horizon_counts(dt_v, HORIZONS, site_lowercase)
+  counts_by_point = run_horizon_counts(
+    dt_v, 
+    HORIZONS, 
+    site_lowercase,
+    analysis = v  
+  )
   
   for (HH in sort(unique(counts_by_point$h))) {
     write_artifact(
@@ -515,14 +521,20 @@ for (v in VARIANTS) {
       site     = site_lowercase,
       strata   = "ca",
       horizon  = HH,
-      variant  = if (v == "main") NULL else v
+      variant  = if (v == "main") NULL else v 
     )
   }
   
   ### bootstrapped horizon counts (1 obs per encounter, 100 iterations) --------
   
   message("  Computing bootstrapped horizon counts...")
-  counts_boot = run_horizon_counts_bootstrap(dt_v, HORIZONS, site_lowercase, B = 100L)
+  counts_boot = run_horizon_counts_bootstrap(
+    dt_v, 
+    HORIZONS, 
+    site_lowercase,
+    analysis = if (v == "main") "boot" else paste0(v, "-boot"), 
+    B = 100L
+  )
   
   for (HH in HORIZONS) {
     write_artifact(
@@ -532,9 +544,11 @@ for (v in VARIANTS) {
       site     = site_lowercase,
       strata   = "ca",
       horizon  = HH,
-      variant  = if (v == "main") "boot" else paste0(v, "-boot")
+      variant  = if (v == "main") "boot" else paste0(v, "-boot")  
     )
   }
+  
+  ## encounter-level max score analyses ----------------------------------------
   
   ## encounter-level max score analyses ----------------------------------------
   
@@ -542,7 +556,11 @@ for (v in VARIANTS) {
   
   if (!is.null(dt_max)) {
     message("  Writing encounter-level max scores...")
-    dt_max_agg = aggregate_maxscores(dt_max, site_lowercase)
+    dt_max_agg = aggregate_maxscores(
+      dt_max, 
+      site_lowercase,
+      analysis = v  
+    )
     
     if (exists("collapse_small")) {
       dt_max_agg = collapse_small(dt_max_agg, grpvars = c("score_name", "ca_01", "outcome"), val_var = "max_value")
@@ -554,7 +572,7 @@ for (v in VARIANTS) {
       artifact = "maxscores",
       site     = site_lowercase,
       strata   = "ca",
-      variant  = if (v == "main") NULL else v
+      variant  = if (v == "main") NULL else v  # Filename gets variant suffix
     )
   } else {
     message("  Skipping encounter-level max scores (not applicable for this variant)")
@@ -721,7 +739,7 @@ write_artifact(
 
 ## get score standard deviations for meta-analysis -----------------------------
 
-score_sds =  |>
+score_sds =  
   fgroup_by(df_model, score_name) |>
   fsummarize(
     sd_score     = fsd(max_value),
@@ -739,7 +757,7 @@ write_artifact(
   artifact = "score_sds",
   site     = site_lowercase
 )
-  
+
 # upset plot data --------------------------------------------------------------
 
 rm(dt_liquid_24h, counts_liquid_24h, dt_max_liquid_agg, dt_max_liquid); gc()
