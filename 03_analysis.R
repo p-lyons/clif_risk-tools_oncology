@@ -140,57 +140,59 @@ aggregate_maxscores = function(dt, site_lowercase, analysis = "main") {
 
 ## collapse small cells --------------------------------------------------------
 
-collapse_small = function(dt, grpvars, val_var = "value", n_var = "n", thresh = 5, max_pct_collapse = 0.01) {
-  
-  dt          = as.data.table(dt)
-  total_n     = sum(dt[[n_var]], na.rm = TRUE)
-  collapsed_n = 0L
-  
-  dt_out = dt[, {
-    setorderv(.SD, val_var, -1L)
-    vals = .SD[[val_var]]
-    ns   = .SD[[n_var]]
-    keep = rep(TRUE, length(ns))
-    
-    for (i in seq_along(ns)) {
-      if (ns[i] < thresh && i < length(ns)) {
-        collapsed_n <<- collapsed_n + ns[i]
-        ns[i + 1] = ns[i + 1] + ns[i]
-        keep[i]   = FALSE
-      }
-    }
-    if (length(ns) > 1L && ns[length(ns)] < thresh) {
-      collapsed_n <<- collapsed_n + ns[length(ns)]
-      ns[length(ns) - 1L] = ns[length(ns) - 1L] + ns[length(ns)]
-      keep[length(ns)]    = FALSE
-    }
-    .(value = vals[keep], n = ns[keep])
-  }, by = grpvars]
-  
-  setnames(dt_out, c("value", "n"), c(val_var, n_var))
-  pct = collapsed_n / total_n
-  
-  if (pct > max_pct_collapse) {
-    stop(sprintf("❌ Collapsed %.4f%% of observations (>%.0f%% allowed). Review needed.", 
-                 100*pct, 100*max_pct_collapse))
-  } else {
-    message(sprintf("✅ Collapsed safely: %.4f%% of observations collapsed (≤%.0f%% allowed).",
-                    100*pct, 100*max_pct_collapse))
-  }
-  dt_out
-}
+## hold off on the need for this...
+
+# collapse_small = function(dt, grpvars, val_var = "value", n_var = "n", thresh = 5, max_pct_collapse = 0.01) {
+#   
+#   dt          = as.data.table(dt)
+#   total_n     = sum(dt[[n_var]], na.rm = TRUE)
+#   collapsed_n = 0L
+#   
+#   dt_out = dt[, {
+#     setorderv(.SD, val_var, -1L)
+#     vals = .SD[[val_var]]
+#     ns   = .SD[[n_var]]
+#     keep = rep(TRUE, length(ns))
+#     
+#     for (i in seq_along(ns)) {
+#       if (ns[i] < thresh && i < length(ns)) {
+#         collapsed_n <<- collapsed_n + ns[i]
+#         ns[i + 1] = ns[i + 1] + ns[i]
+#         keep[i]   = FALSE
+#       }
+#     }
+#     if (length(ns) > 1L && ns[length(ns)] < thresh) {
+#       collapsed_n <<- collapsed_n + ns[length(ns)]
+#       ns[length(ns) - 1L] = ns[length(ns) - 1L] + ns[length(ns)]
+#       keep[length(ns)]    = FALSE
+#     }
+#     .(value = vals[keep], n = ns[keep])
+#   }, by = grpvars]
+#   
+#   setnames(dt_out, c("value", "n"), c(val_var, n_var))
+#   pct = collapsed_n / total_n
+#   
+#   if (pct > max_pct_collapse) {
+#     stop(sprintf("❌ Collapsed %.4f%% of observations (>%.0f%% allowed). Review needed.", 
+#                  100*pct, 100*max_pct_collapse))
+#   } else {
+#     message(sprintf("✅ Collapsed safely: %.4f%% of observations collapsed (≤%.0f%% allowed).",
+#                     100*pct, 100*max_pct_collapse))
+#   }
+#   dt_out
+# }
 
 ## failsafe: ensure no cells with n < 5 ----------------------------------------
 
-ensure_min_n = function(dt, n_var = "n", thresh = 5) {
-  dt = as.data.table(dt)
-  k = sum(dt[[n_var]] < thresh, na.rm = TRUE)
-  if (k > 0) {
-    message(sprintf("  Failsafe: %d cells with n < %d set to %d", k, thresh, thresh))
-    dt[get(n_var) < thresh, (n_var) := thresh]
-  }
-  dt[]
-}
+# ensure_min_n = function(dt, n_var = "n", thresh = 5) {
+#   dt = as.data.table(dt)
+#   k = sum(dt[[n_var]] < thresh, na.rm = TRUE)
+#   if (k > 0) {
+#     message(sprintf("  Failsafe: %d cells with n < %d set to %d", k, thresh, thresh))
+#     dt[get(n_var) < thresh, (n_var) := thresh]
+#   }
+#   dt[]
+# }
 
 ## horizon counts (non-bootstrapped) -------------------------------------------
 
@@ -294,8 +296,7 @@ scores_max_enc =
 # ever positive analysis (time to first threshold crossing) -------------------
 
 ever_positive = 
-  scores |>
-  fsubset(ed_admit_01 == 1) |>
+  fsubset(scores, ed_admit_01 == 1) |>
   pivot_longer(
     cols      = ends_with("total"),
     names_to  = "score_name",
@@ -315,7 +316,8 @@ ever_positive =
 
 all_encs = 
   fsubset(cohort, ed_admit_01 == 1) |>
-  fselect(joined_hosp_id, ca_01)
+  ftransform(deadhospice_01 = dead_01 + hospice_01) |>
+  fselect(joined_hosp_id, ca_01, deadhospice_01)
 
 ever_positive_complete =
   tidyr::expand_grid(
@@ -326,7 +328,7 @@ ever_positive_complete =
   join(all_encs,      how = "left", multiple = FALSE) |>
   join(ever_positive, how = "left", multiple = FALSE) |>
   ftransform(ever_positive = as.integer(!is.na(time_to_positive_h))) |>
-  fselect(joined_hosp_id, score_name, ca_01, ever_positive)
+  fselect(joined_hosp_id, score_name, ca_01, ever_positive, deadhospice_01)
 
 # sanity check
 stopifnot(all(c("score_name","ca_01","ever_positive") %chin% names(ever_positive_complete)))
@@ -335,11 +337,11 @@ stopifnot(all(c("score_name","ca_01","ever_positive") %chin% names(ever_positive
 
 ever_positive_agg =
   as.data.table(ever_positive_complete)[
-    , .(n = .N), by = .(score_name, ca_01, ever_positive)
+    , .(n = .N), by = .(score_name, ca_01, ever_positive, deadhospice_01)
   ][, site := site_lowercase][]
 
 write_artifact(
-  df       = ensure_min_n(ever_positive_agg),
+  df       = ever_positive_agg, # removed ensure_min_n
   analysis = "threshold",
   artifact = "ever",
   site     = site_lowercase,
@@ -454,7 +456,7 @@ time_to_positive =
   )
 
 write_artifact(
-  df       = ensure_min_n(time_to_positive),
+  df       = time_to_positive, # removed ensure_min_n
   analysis = "threshold",
   artifact = "first",
   site     = site_lowercase,
@@ -478,7 +480,7 @@ contributors =
   )
 
 write_artifact(
-  df       = ensure_min_n(contributors),
+  df       = contributors, # removed ensure_min_n
   analysis = "threshold",
   artifact = "upset",
   site     = site_lowercase,
@@ -515,7 +517,7 @@ for (v in VARIANTS) {
   
   for (HH in sort(unique(counts_by_point$h))) {
     write_artifact(
-      df       = ensure_min_n(counts_by_point[h == HH]),
+      df       = counts_by_point[h == HH],
       analysis = if (v == "main") "horizon" else "sensitivity",
       artifact = "counts",
       site     = site_lowercase,
@@ -538,7 +540,7 @@ for (v in VARIANTS) {
   
   for (HH in HORIZONS) {
     write_artifact(
-      df       = ensure_min_n(counts_boot[h == HH]),
+      df       = counts_boot[h == HH],
       analysis = if (v == "main") "horizon" else "sensitivity",
       artifact = "counts",
       site     = site_lowercase,
@@ -567,7 +569,7 @@ for (v in VARIANTS) {
     }
     
     write_artifact(
-      df       = ensure_min_n(dt_max_agg),
+      df       = dt_max_agg,
       analysis = if (v == "main") "main" else "sensitivity",
       artifact = "maxscores",
       site     = site_lowercase,
@@ -620,7 +622,7 @@ if (exists("collapse_small")) {
 }
 
 write_artifact(
-  df       = ensure_min_n(dt_max_liquid_agg),
+  df       = dt_max_liquid_agg,
   analysis = "main",
   artifact = "maxscores",
   site     = site_lowercase,
@@ -648,7 +650,7 @@ if (exists("collapse_small")) {
 }
 
 write_artifact(
-  df       = ensure_min_n(counts_liquid_24h),
+  df       = counts_liquid_24h,
   analysis = "horizon",
   artifact = "counts",
   site     = site_lowercase,
@@ -731,7 +733,7 @@ site_fit_tbl = rbindlist(
 )[, site := site_lowercase][]
 
 write_artifact(
-  df       = ensure_min_n(site_fit_tbl),
+  df       = site_fit_tbl,
   analysis = "meta",
   artifact = "coefficients",
   site     = site_lowercase
@@ -784,7 +786,7 @@ pooled_upset_counts = {
 }
 
 write_artifact(
-  df       = ensure_min_n(pooled_upset_counts),
+  df       = pooled_upset_counts,
   analysis = "threshold",
   artifact = "upset",
   site     = site_lowercase,
