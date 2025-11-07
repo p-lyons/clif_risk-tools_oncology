@@ -719,6 +719,27 @@ write_artifact(
   site     = site_lowercase
 )
 
+## get score standard deviations for meta-analysis -----------------------------
+
+score_sds =  |>
+  fgroup_by(df_model, score_name) |>
+  fsummarize(
+    sd_score     = fsd(max_value),
+    mean_score   = fmean(max_value),
+    n_encounters = fn(max_value)
+  ) |>
+  frename(score = score_name) |>
+  ftransform(site = site_lowercase)
+
+.allowed$meta = c("coefficients", "score_sds")
+
+write_artifact(
+  df       = score_sds,
+  analysis = "meta",
+  artifact = "score_sds",
+  site     = site_lowercase
+)
+  
 # upset plot data --------------------------------------------------------------
 
 rm(dt_liquid_24h, counts_liquid_24h, dt_max_liquid_agg, dt_max_liquid); gc()
