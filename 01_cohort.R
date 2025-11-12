@@ -98,14 +98,19 @@ hid_jid_crosswalk = select(linked, ends_with("id")) |> as_tidytable()
 inpatient_hids = 
   dplyr::filter(data_list$adt, tolower(location_category) %in% c("ward")) |>
   dplyr::select(hospitalization_id) |>
-  dplyr::collect() |>
-  funique() |>
+  dplyr::collect() 
+
+inpatient_hids = 
+  funique(inpatient_hids) |>
   tibble::deframe()
 
 inpatient_jids = 
   fsubset(hid_jid_crosswalk, hospitalization_id %in% inpatient_hids) |>
   select(joined_hosp_id) |>
-  funique() |>
+  funique() 
+
+inpatient_jids = 
+  funique(inpatient_jids) |>
   tibble::deframe()
 
 ### don't want to include obstetrics/psych -------------------------------------
@@ -113,8 +118,10 @@ inpatient_jids =
 drop_ob = 
   dplyr::filter(data_list$adt, tolower(location_category) %in% c("l&d", "psych", "rehab")) |>
   dplyr::select(hospitalization_id) |>
-  dplyr::collect() |>
-  funique() |>
+  dplyr::collect() 
+
+drop_ob = 
+  funique(drop_ob) |>
   tibble::deframe()
 
 drop_ob_jids = 
@@ -145,17 +152,18 @@ has_vital_signs =
   dplyr::filter(data_list$vitals, hospitalization_id %in% inpatient_hids) |>
   dplyr::filter(vital_category %in% req_vitals) |>
   dplyr::select(hospitalization_id, vital_category, recorded_dttm) |>
-  dplyr::collect() |>
-  funique() 
+  dplyr::collect() 
+
+has_vital_signs = funique(has_vital_signs) 
 
 has_vital_signs = 
   join(has_vital_signs, ward_times, how = "inner", multiple = T) |>
   fsubset(recorded_dttm >= in_dttm & recorded_dttm <= out_dttm) |>
-  select(joined_hosp_id, vital_category) |>
+  fselect(joined_hosp_id, vital_category) |>
   funique() |>
   summarize(n = n(), .by = joined_hosp_id) |>
   fsubset(n == length(req_vitals)) |>
-  select(joined_hosp_id) |>
+  fselect(joined_hosp_id) |>
   tibble::deframe()
 
 linked            = fsubset(linked, joined_hosp_id %in% has_vital_signs) 
@@ -165,9 +173,7 @@ cohort_pats       = funique(hid_jid_crosswalk$patient_id)
 
 ### clean up helpers -----------------------------------------------------------
 
-rm(inpatient_hids, inpatient_jids, drop_ob, drop_ob_jids)
-rm(has_vital_signs, hosp_blocks, link_hours)
-gc()
+rm(inpatient_hids, inpatient_jids, drop_ob, drop_ob_jids, has_vital_signs, hosp_blocks, link_hours); gc()
 
 ## assemble cohort data frame --------------------------------------------------
 
@@ -295,7 +301,7 @@ ca_codes =
   fsubset(!str_detect(icd_10_cm_code_specific, "^Z85")) |>
   fsubset(!str_detect(icd_10_cm_code_definition, "in remission|personal history")) |>
   fmutate(liquid_01 = if_else(general_category == "Hematopoietic neoplasm", 1L, 0L)) |>
-  select(diagnosis_code = icd_10_cm_code_specific, liquid_01)
+  fselect(diagnosis_code = icd_10_cm_code_specific, liquid_01)
 
 ca_vect  = funique(toupper(ca_codes$diagnosis_code))
 
@@ -305,8 +311,9 @@ dx =
   dplyr::filter(data_list$hospital_diagnosis, hospitalization_id %in% cohort_hids) |>
   dplyr::filter(toupper(diagnosis_code) %in% ca_vect) |>
   dplyr::select(hospitalization_id, poa_present, diagnosis_code) |>
-  dplyr::collect() |>
-  funique()
+  dplyr::collect() 
+
+dx = funique(dx)
 
 ### assign hierarchy to diagnoses ----------------------------------------------
 
@@ -410,14 +417,15 @@ ed_admits =
   dplyr::filter(data_list$adt, hospitalization_id %in% cohort_hids) |>
   dplyr::filter(tolower(location_category) == "ed") |>
   dplyr::select(hospitalization_id) |>
-  dplyr::collect() |>
-  funique() |>
+  dplyr::collect()
+
+ed_admits = 
+  funique(ed_admits) |>
   tibble::deframe()
 
 first_ed_jids = 
   fsubset(hid_jid_crosswalk, hospitalization_id %in% ed_admits) |>
-  select(joined_hosp_id) |>
-  tibble::deframe()
+  pull(joined_hosp_id) 
 
 ### apply exclusion to cohort --------------------------------------------------
 
@@ -447,8 +455,7 @@ icu_before_wards =
   ) |>
   fsubset(!is.na(time_icu)) |>
   fsubset(time_icu < time_ward) |>
-  select(joined_hosp_id) |>
-  tibble::deframe()
+  pull(joined_hosp_id) 
 
 ### apply exclusion to cohort --------------------------------------------------
 
@@ -472,8 +479,9 @@ vmax =
   dplyr::filter(data_list$vitals, hospitalization_id %in% cohort_hids) |>
   dplyr::filter(vital_category %in% req_vitals) |>
   dplyr::select(hospitalization_id, recorded_dttm) |>
-  dplyr::collect() |>
-  funique()
+  dplyr::collect()
+
+vmax = funique(vmax)
 
 vmax = 
   join(vmax, hid_jid_crosswalk, how = "inner", multiple = T) |>
@@ -491,8 +499,7 @@ first_ward =
 vmax = 
   join(vmax, first_ward, how = "inner", multiple = F) |>
   fsubset(vtime < first_ward_dttm + lubridate::dhours(min_ward_hours)) |>
-  fselect(joined_hosp_id) |>
-  tibble::deframe()
+  pull(joined_hosp_id) 
 
 ### apply exclusion to cohort --------------------------------------------------
 
@@ -534,8 +541,7 @@ icu =
 icu = 
   join(icu, cohort, how = "inner", multiple = F) |>
   fsubset(itime < first_ward_dttm + lubridate::dhours(6)) |>
-  fselect(joined_hosp_id) |>
-  tibble::deframe()
+  pull(joined_hosp_id) 
 
 ### apply exclusion to cohort --------------------------------------------------
 
@@ -587,8 +593,9 @@ gc()
 cohort_demographics = 
   dplyr::filter(data_list$patient, patient_id %in% cohort_pats) |>
   dplyr::select(patient_id, death_dttm, ends_with("category")) |>
-  dplyr::collect() |>
-  funique()
+  dplyr::collect() 
+
+cohort_demographics = funique(cohort_demographics)
 
 pt_dups = 
   fcount(cohort_demographics, patient_id, name = "n") |>
@@ -622,8 +629,9 @@ rm(pt_dups, cohort_demographics); gc()
 codes = 
   data_list[["code_status"]] |>
   dplyr::select(patient_id, start_dttm, code_status_category) |>
-  dplyr::collect() |>
-  funique()
+  dplyr::collect() 
+
+codes = funique(codes)
 
 codes = 
   join(cohort, codes, how = "left", multiple = T) |>
@@ -648,8 +656,9 @@ icu =
   dplyr::filter(data_list$adt, hospitalization_id %in% cohort_hids) |>
   dplyr::select(hospitalization_id, in_dttm, location_category) |>
   dplyr::arrange(in_dttm) |>
-  dplyr::collect() |>
-  funique()
+  dplyr::collect() 
+
+icu = funique(icu)
 
 ### link to joined_hosp_id -----------------------------------------------------
 
@@ -693,8 +702,8 @@ icu =
 
 death = 
   fsubset(cohort, dead_01 == 1) |>
-  select(joined_hosp_id, event_dttm = discharge_dttm) |>
-  fmutate(event = "death") 
+  fselect(joined_hosp_id, event_dttm = discharge_dttm) |>
+  ftransform(event = "death") 
 
 #### don't need to specify death on wards, 
 #### because if it occurs before ICU it must be
@@ -703,7 +712,7 @@ death =
 
 hospice = 
   fsubset(cohort, hospice_01 == 1) |>
-  select(joined_hosp_id, event_dttm = discharge_dttm) |>
+  fselect(joined_hosp_id, event_dttm = discharge_dttm) |>
   fmutate(event = "hospice") 
 
 ## outcomes data frame ---------------------------------------------------------
@@ -732,8 +741,7 @@ fwrite(df_outcomes, here("proj_tables", "outcome_times.csv"))
 
 ward_icu_tx = 
   fsubset(df_outcomes, outcome_cat == "icu") |>
-  fselect(joined_hosp_id) |>
-  tibble::deframe()
+  pull(joined_hosp_id)
 
 rm(df_outcomes, death, hospice, icu); gc()
 
@@ -752,8 +760,10 @@ va_list = c(
 meds = 
   dplyr::filter(data_list$medication_admin_continuous, tolower(med_category) %in% va_list) |>
   dplyr::select(hospitalization_id, admin_dttm, ends_with("category")) |>
-  dplyr::collect() |>
-  join(hid_jid_crosswalk, how = "inner", multiple = T) |>
+  dplyr::collect() 
+
+meds = 
+  join(meds, hid_jid_crosswalk, how = "inner", multiple = T) |>
   fselect(joined_hosp_id, admin_dttm, med_category) |>
   funique()
 
@@ -780,8 +790,10 @@ resp =
   dplyr::filter(data_list$respiratory_support, hospitalization_id %in% cohort_hids) |>
   dplyr::filter(tolower(device_category) %in% resp_list) |>
   dplyr::select(hospitalization_id, recorded_dttm, device_category) |>
-  dplyr::collect() |>
-  join(hid_jid_crosswalk, how = "inner", multiple = T) |>
+  dplyr::collect() 
+
+resp =
+  join(resp, hid_jid_crosswalk, how = "inner", multiple = T) |>
   fselect(joined_hosp_id, recorded_dttm, device_category) |>
   funique()
 
@@ -793,8 +805,8 @@ resp =
   select(joined_hosp_id, event_dttm = recorded_dttm, event) |>
   funique()
 
-present_events  = sort(funique(tolower(resp$event)))
-missing_events  = setdiff(resp_list, present_events)
+present_events = sort(funique(tolower(resp$event)))
+missing_events = setdiff(resp_list, present_events)
 
 if (length(missing_events) > 0) {
   stop(
@@ -818,13 +830,13 @@ rowbind(meds, resp, fill = T) |>
 
 va_encs  = 
   fsubset(meds, event == "vasopressor") |>
-  select(joined_hosp_id) |>
+  fselect(joined_hosp_id) |>
   funique() |>
   tibble::deframe()
 
 imv_encs = 
   fsubset(resp, event == "imv") |>
-  select(joined_hosp_id) |>
+  fselect(joined_hosp_id) |>
   funique() |>
   tibble::deframe()
 
@@ -877,8 +889,9 @@ elix =
   dplyr::filter(data_list$hospital_diagnosis, hospitalization_id %in% cohort_hids) |>
   dplyr::filter(!toupper(diagnosis_code) %in% unused_vect) |>
   dplyr::select(hospitalization_id, poa_present, diagnosis_code) |>
-  dplyr::collect() |>
-  funique()
+  dplyr::collect() 
+
+elix = funique(elix)
 
 ### assign elixhauser diagnosis dummies ----------------------------------------
 
@@ -937,11 +950,11 @@ props =
   )
 
 if (
-  props$icu     > 0.50 | props$icu == 0     |
-  props$dead    > 0.20 | props$dead == 0    |
+  props$icu     > 0.50 | props$icu     == 0 |
+  props$dead    > 0.20 | props$dead    == 0 |
   props$hospice > 0.10 | props$hospice == 0 |
-  props$imv     > 0.40 | props$imv == 0     |
-  props$va      > 0.40 | props$va == 0) {
+  props$imv     > 0.40 | props$imv     == 0 |
+  props$va      > 0.40 | props$va      == 0) {
   stop("Sanity check failed: Outcome distribution out of expected range.")
 }
 
