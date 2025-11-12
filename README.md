@@ -1,8 +1,7 @@
-**# clif_risk-tools_oncology
-**
+
 Purpose
 
-Validate common risk scores (SIRS, qSOFA, MEWS, NEWS, MEWS+SF) in adult oncology inpatients using the CLIF federated model. Pipeline builds a cohort, derives time-varying scores, defines outcomes, and exports analysis-ready artifacts with built-in QC and privacy safeguards.
+Validate common risk scores (SIRS, qSOFA, MEWS, NEWS, MEWS+SF) in adult oncology inpatients using CLIF federated dataset. Pipeline builds a cohort, derives time-varying scores, defines outcomes, and exports analysis-ready artifacts with built-in QC and privacy safeguards.
 
 Repository layout
 config/
@@ -22,7 +21,7 @@ Data requirements
 Required CLIF tables in config$clif_data_location as clif_<name>.<file_type>:
 
 patient, hospital_diagnosis, hospitalization, adt, vitals, labs,
-medication_admin_continuous, respiratory_support, code_status
+medication_admin_continuous, respiratory_support, code_status, patient_assessments
 
 Supported file_type: parquet, csv, or fst.
 
@@ -57,15 +56,20 @@ Multithreading uses available cores and RAM; environment variables are set for A
 
 How to run
 
+Artifacts are written under proj_tables/ and upload_to_box/ (see below).
+
 From repo root:
+1. Populate config/config_clif_oncrisk.yaml.
+2. Confirm clif_sites.csv contains your site_lowercase.
+3. Open RProject
+4. Open run_all.R
 
-source("scripts/00_setup.R")    # environment, config, load Arrow/CSV/FST, validate
-source("scripts/01_cohort.R")   # build cohort and outcomes, save cohort.parquet
-source("scripts/02_scores.R")   # assign SIRS/qSOFA/MEWS/NEWS/MEWS+SF, save scores_full.parquet
-source("scripts/03_analyses.R") # main + sensitivity + bootstraps + subgroups; write artifacts
-
-
-Artifacts are written under proj_tables/ and proj_output/ (see below).
+Alternatives
+source("code/00_setup.R")    # environment, config, load Arrow/CSV/FST, validate
+source("code/01_cohort.R")   # build cohort and outcomes, save cohort.parquet
+source("code/02_scores.R")   # assign SIRS/qSOFA/MEWS/NEWS/MEWS+SF, save scores_full.parquet
+source("code/03_analyses.R") # main + sensitivity + bootstraps + subgroups; write artifacts
+source("code/run_all.R")     # runs all scripts in sequence
 
 Pipeline details
 00_setup: environment, loading, validation
@@ -218,22 +222,8 @@ Versions: record sessionInfo() when submitting pooled artifacts.
 
 Pathing: all paths via here(); set project_location in config for nonstandard layouts.
 
-Citation
 
-If you use this code or derived artifacts, cite the CLIF consortium and the bedside scores’ original publications. Package citations: citation("arrow"), citation("data.table"), citation("comorbidity"), etc.
 
-License and governance
 
-Add your institutional license and data-use restrictions. Patient-level data never leaves the site; share only pooled, suppressed outputs.
 
-Quick start checklist
 
-Populate config/config_clif_oncrisk.yaml.
-
-Confirm clif_sites.csv contains your site_lowercase.
-
-Place CLIF extracts in clif_data_location with required table names.
-
-Run 00 → 01 → 02 → 03 in order.
-
-Inspect proj_output/* for artifacts to contribute upstream.
