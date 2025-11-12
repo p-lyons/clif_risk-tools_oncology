@@ -40,7 +40,7 @@ make_y = function(h_to_event, horizon) {
 
 write_artifact = function(df, analysis, artifact, site,
                           strata = NULL, horizon = NULL, variant = NULL,
-                          root = "proj_output") {
+                          root = "upload_to_box") {
   stopifnot(analysis %in% names(.allowed), artifact %in% .allowed[[analysis]])
   dir = file.path(root, analysis)
   if (!dir.exists(dir)) dir.create(dir, recursive = TRUE, showWarnings = FALSE)
