@@ -168,8 +168,8 @@ if (!(file_type %in% allowed_files)) {
 if (!dir.exists(paste0(project_location, "/proj_tables"))) {
   dir.create(paste0(project_location, "/proj_tables"))
 }
-if (!dir.exists(paste0(project_location, "/proj_output"))) {
-  dir.create(paste0(project_location, "/proj_output"))
+if (!dir.exists(paste0(project_location, "/upload_to_box"))) {
+  dir.create(paste0(project_location, "/upload_to_box"))
 }
 
 ### dates ----------------------------------------------------------------------
