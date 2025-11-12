@@ -377,7 +377,7 @@ cohort$liquid_01 = if_else(is.na(cohort$liquid_01_enc), 0L, cohort$liquid_01_enc
 # 
 # fwrite(
 #   cancer_code_tally_all,
-#   here("proj_output", paste0("cancer_codes_all_", site_lowercase, ".csv"))
+#   here("upload_to_box", paste0("cancer_codes_all_", site_lowercase, ".csv"))
 # )
 
 ### tally primary cancer codes (one per encounter using priority) --------------
@@ -392,7 +392,7 @@ cancer_code_tally_primary =
 
 fwrite(
   cancer_code_tally_primary,
-  here("proj_output", paste0("cancer_codes_primary_", site_lowercase, ".csv"))
+  here("upload_to_box", paste0("cancer_codes_primary_", site_lowercase, ".csv"))
 )
 
 ### tally for inclusion flow diagram -------------------------------------------
@@ -573,7 +573,7 @@ flow_df = tidytable(
   n_excluded_no,
 ) 
 
-fwrite(flow_df, here("proj_output", paste0("figure_s01_flow_", site_lowercase, ".csv")))
+fwrite(flow_df, here("upload_to_box", paste0("figure_s01_flow_", site_lowercase, ".csv")))
 
 rm(flow_df, step_labels, n_remaining_ca, n_remaining_no, n_excluded_ca, n_excluded_no)
 gc()
@@ -1063,8 +1063,8 @@ if (sum(t2_cont$n) != nrow(cohort[ed_admit_01 == 1])) {
 
 ## export table 2 --------------------------------------------------------------
 
-fwrite(all_cat, here("proj_output", paste0("table_02_cat_",  site_lowercase, ".csv")))
-fwrite(t2_cont, here("proj_output", paste0("table_02_cont_", site_lowercase, ".csv")))
+fwrite(all_cat, here("upload_to_box", paste0("table_02_cat_",  site_lowercase, ".csv")))
+fwrite(t2_cont, here("upload_to_box", paste0("table_02_cont_", site_lowercase, ".csv")))
 
 # final cleanup ----------------------------------------------------------------
 
