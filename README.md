@@ -1,5 +1,5 @@
-# clif_risk-tools_oncology
-
+**# clif_risk-tools_oncology
+**
 Purpose
 
 Validate common risk scores (SIRS, qSOFA, MEWS, NEWS, MEWS+SF) in adult oncology inpatients using the CLIF federated model. Pipeline builds a cohort, derives time-varying scores, defines outcomes, and exports analysis-ready artifacts with built-in QC and privacy safeguards.
