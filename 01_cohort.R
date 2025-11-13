@@ -3,6 +3,20 @@
 # Cohort script for CLIF project validating risk tools in oncology.
 # Requires data_list to be loaded/validated from 00_*
 
+# check/create output directories ---------------------------------------------
+
+if (!exists("project_location")) {
+  stop("project_location not found. Did you run 00_setup first?", call. = FALSE)
+}
+
+if (!dir.exists(paste0(project_location, "/upload_to_box"))) {
+  dir.create(paste0(project_location, "/upload_to_box"), recursive = TRUE)
+}
+
+if (!dir.exists(paste0(project_location, "/proj_tables"))) {
+  dir.create(paste0(project_location, "/proj_tables"), recursive = TRUE)
+}
+
 # resources for RAM heavy wrangling --------------------------------------------
 
 ## cores & RAM (reuse from 00 if available) ------------------------------------
@@ -743,7 +757,7 @@ ward_icu_tx =
   fsubset(df_outcomes, outcome_cat == "icu") |>
   pull(joined_hosp_id)
 
-rm(df_outcomes, death, hospice, icu); gc()
+rm(death, hospice, icu); gc()
 
 # other care processes --------------------------------------------------------#
 
