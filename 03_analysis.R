@@ -172,11 +172,22 @@ fit_one_score = function(df, score, outcome_col = "outcome", cancer_col = "ca_01
     as.formula(paste0(outcome_col, " ~ ", max_value_col, " * ", cancer_col))
   }
   
-  fit = glmmTMB(
-    f,
-    family  = binomial(),
-    data    = df_sub,
-    control = glmmTMBControl(optimizer = optim, optArgs = list(method = "BFGS"))
+  # Try nlminb first (default), fall back to BFGS if needed
+  fit = tryCatch(
+    glmmTMB(f, family = binomial(), data = df_sub),
+    warning = function(w) {
+      if (grepl("non-positive-definite", conditionMessage(w))) {
+        glmmTMB(
+          f, 
+          family = binomial(), 
+          data = df_sub,
+          control = glmmTMBControl(optimizer = optim, optArgs = list(method = "BFGS"))
+        )
+      } else {
+        warning(w)
+        glmmTMB(f, family = binomial(), data = df_sub)
+      }
+    }
   )
   
   co = summary(fit)$coefficients$cond
@@ -187,8 +198,8 @@ fit_one_score = function(df, score, outcome_col = "outcome", cancer_col = "ca_01
     stop("Could not uniquely identify interaction term. Found: ", paste(int_rows, collapse = ", "))
   }
   
-  est    = co[int_rows, "Estimate"]
-  se     = co[int_rows, "Std. Error"]
+  est = co[int_rows, "Estimate"]
+  se = co[int_rows, "Std. Error"]
   n_used = nobs(fit)
   
   tidytable(
@@ -198,7 +209,8 @@ fit_one_score = function(df, score, outcome_col = "outcome", cancer_col = "ca_01
     site_n      = n_used,
     n_events    = fsum(df_sub[[outcome_col]] == 1L, na.rm = TRUE),
     n_hospitals = fnunique(df_sub[[hosp_col]]),
-    converged   = isTRUE(fit$fit$convergence == 0)
+    converged   = isTRUE(fit$fit$convergence == 0),
+    hess_pd     = !any(is.na(se))  # Track if Hessian was positive definite
   )
 }
 
