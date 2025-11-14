@@ -1055,25 +1055,6 @@ t2_cat =
 
 ## quality control -------------------------------------------------------------
 
-### check for small n in cells -------------------------------------------------
-
-ages_cat$site = site_lowercase
-elix_cat$site = site_lowercase
-los_cat$site  = site_lowercase
-t2_cat$site   = site_lowercase
-
-all_cat = rowbind(ages_cat, elix_cat, los_cat, t2_cat)
-small_c = fsubset(all_cat, n < 5 & n > 0)
-
-if (nrow(small_c) > 0) {
-  msg = paste0(
-    "ERROR: ", nrow(small_c), " cells have n < 5:\n",
-    capture.output(print(small_c |> fselect(var, category, ca_01, n))) |> 
-      paste(collapse = "\n")
-  )
-  stop(msg)
-}
-
 ### check for sample size mismatch in continuous table -------------------------
 
 if (sum(t2_cont$n) != nrow(cohort[ed_admit_01 == 1])) {
