@@ -1063,7 +1063,7 @@ if (sum(t2_cont$n) != nrow(cohort[ed_admit_01 == 1])) {
 
 ## export table 2 --------------------------------------------------------------
 
-fwrite(all_cat, here("upload_to_box", paste0("table_02_cat_",  site_lowercase, ".csv")))
+fwrite(t2_cat, here("upload_to_box", paste0("table_02_cat_",  site_lowercase, ".csv")))
 fwrite(t2_cont, here("upload_to_box", paste0("table_02_cont_", site_lowercase, ".csv")))
 
 # final cleanup ----------------------------------------------------------------
