@@ -1053,6 +1053,12 @@ t2_cat =
   ftransform(category = tolower(str_replace_all(as.character(val), "-", "_"))) |>
   fselect(ca_01, var, category, n) 
 
+t2_cat$category = case_when(
+  tolower(t2_cat$var) != "initial_code_status"  ~ tolower(t2_cat$category),
+  tolower(t2_cat$category) == "special/partial" ~ "other",
+  TRUE                                          ~ tolower(t2_cat$category)
+)
+             
 ## quality control -------------------------------------------------------------
 
 ### check for sample size mismatch in continuous table -------------------------
