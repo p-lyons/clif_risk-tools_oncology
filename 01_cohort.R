@@ -89,14 +89,12 @@ link_hours = 6L
 linked     = as.data.table(hosp_blocks)
 setorder(linked, patient_id, admission_dttm)
 
-#### calculate gaps between encounters
-linked[, next_admit := shift(admission_dttm, type = "lead"), by = patient_id]
+#### calculate gaps between encounters and mark encounters that should be linked
+linked[, next_admit := shift(admission_dttm, type = "lead"),           by    = patient_id]
 linked[, next_gap   := as.numeric(difftime(next_admit, discharge_dttm, units = "hours"))]
-linked[, prev_dc    := shift(discharge_dttm, type = "lag"), by = patient_id]  
-linked[, prev_gap   := as.numeric(difftime(admission_dttm, prev_dc, units = "hours"))]
-
-#### mark encounters that should be linked
-linked[, link_flag := (next_gap < link_hours | prev_gap < link_hours)]
+linked[, prev_dc    := shift(discharge_dttm, type = "lag"),            by    = patient_id]  
+linked[, prev_gap   := as.numeric(difftime(admission_dttm, prev_dc,    units = "hours"))]
+linked[, link_flag  := (next_gap < link_hours | prev_gap < link_hours)]
 linked[is.na(link_flag), link_flag := FALSE]
 
 #### create unique joined hospitalization ID, new group whenever gap > link_hours from  previous discharge
@@ -167,9 +165,8 @@ has_vital_signs =
   dplyr::filter(data_list$vitals, hospitalization_id %in% inpatient_hids) |>
   dplyr::filter(vital_category %in% req_vitals) |>
   dplyr::select(hospitalization_id, vital_category, recorded_dttm) |>
-  dplyr::collect() 
-
-has_vital_signs = distinct(has_vital_signs) 
+  dplyr::collect() |>
+  distinct()
 
 has_vital_signs = 
   join(has_vital_signs, ward_times, how = "inner", multiple = T) |>
@@ -182,6 +179,10 @@ has_vital_signs =
   fnobs() |>
   fsubset(vital_category== length(req_vitals)) |>
   pull(joined_hosp_id) 
+
+### double-check study years ---------------------------------------------------
+
+### data for cohort development ------------------------------------------------
 
 linked            = fsubset(linked, joined_hosp_id %in% has_vital_signs) 
 hid_jid_crosswalk = select(linked, ends_with("id"))
@@ -854,10 +855,10 @@ imv_encs =
 
 cohort = 
   funique(cohort) |>
-  fmutate(wicu_01 = if_else(joined_hosp_id %in% ward_icu_tx,  1L, 0L, 0L)) |>
-  fmutate(icu_01  = if_else(joined_hosp_id %in% icu_encs,     1L, 0L, 0L)) |>
-  fmutate(imv_01  = if_else(joined_hosp_id %in% imv_encs,     1L, 0L, 0L)) |>
-  fmutate(va_01   = if_else(joined_hosp_id %in% va_encs,      1L, 0L, 0L)) |>
+  fmutate(wicu_01    = if_else(joined_hosp_id %in% ward_icu_tx,  1L, 0L, 0L)) |>
+  fmutate(icu_01     = if_else(joined_hosp_id %in% icu_encs,     1L, 0L, 0L)) |>
+  fmutate(imv_01     = if_else(joined_hosp_id %in% imv_encs,     1L, 0L, 0L)) |>
+  fmutate(va_01      = if_else(joined_hosp_id %in% va_encs,      1L, 0L, 0L)) |>
   fmutate(d_noicu_01 = if_else(dead_01 == 1    & icu_01 != 1, 1L, 0L, 0L)) |>
   fmutate(h_noicu_01 = if_else(hospice_01 == 1 & icu_01 != 1, 1L, 0L, 0L)) |>
   select(
@@ -1004,7 +1005,9 @@ miss_summary =
 
 fwrite(miss_summary, here("upload_to_box", paste0("missing_demog_", site_lowercase, ".csv")))
 
-cohort = select(cohort, -starts_with("miss_"))
+cohort = 
+  select(cohort, -starts_with("miss_")) |>
+  fmutate(year = lubridate::year(admission_dttm))
 
 # t02. characteristics/outcomes by cancer status (0 = none, 1 = cancer) --------
 
@@ -1102,7 +1105,7 @@ if (sum(t2_cont$n) != nrow(cohort[ed_admit_01 == 1])) {
 
 ## export table 2 --------------------------------------------------------------
 
-fwrite(t2_cat, here("upload_to_box", paste0("table_02_cat_",  site_lowercase, ".csv")))
+fwrite(t2_cat,  here("upload_to_box", paste0("table_02_cat_",  site_lowercase, ".csv")))
 fwrite(t2_cont, here("upload_to_box", paste0("table_02_cont_", site_lowercase, ".csv")))
 
 # final cleanup ----------------------------------------------------------------
