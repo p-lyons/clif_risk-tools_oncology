@@ -172,6 +172,38 @@ vitals_list$spo2 =
   ) |>
   rename(spo2 = val)
 
+## de-duplicate ----------------------------------------------------------------
+
+vitals_list$heart_rate =
+  vitals_list[["heart_rate"]] |>
+  fgroup_by(joined_hosp_id, time) |>
+  fmax()
+
+vitals_list$respiratory_rate =
+  vitals_list[["respiratory_rate"]] |>
+  fgroup_by(joined_hosp_id, time) |>
+  fmax()
+
+vitals_list$sbp =
+  vitals_list[["sbp"]] |>
+  fgroup_by(joined_hosp_id, time) |>
+  fmax()
+
+vitals_list$temp_c =
+  vitals_list[["temp_c"]] |>
+  fgroup_by(joined_hosp_id, time) |>
+  fmax()
+
+vitals_list$gcs =
+  vitals_list[["gcs"]] |>
+  fgroup_by(joined_hosp_id, time) |>
+  fmax()
+
+vitals_list$spo2 =
+  vitals_list[["spo2"]] |>
+  fgroup_by(joined_hosp_id, time) |>
+  fmax()
+
 ## sf ratio (mews_sf, pmid 32114753) -------------------------------------------
 
 ### prepare fio2 from respiratory table ----------------------------------------
@@ -284,6 +316,14 @@ scores =
   )
 
 if ("val" %in% names(scores)) scores <- select(scores, -val)
+
+setDT(scores)
+score_component_cols = setdiff(names(scores), c("joined_hosp_id", "time"))
+scores = scores[, lapply(.SD, max, na.rm = TRUE), by = .(joined_hosp_id, time), .SDcols = score_component_cols]
+
+for (col in score_component_cols) {
+  scores[is.infinite(get(col)), (col) := NA_integer_]
+}
 
 rm(resp, labs, vitals_list, get_each_vital); gc()
 
