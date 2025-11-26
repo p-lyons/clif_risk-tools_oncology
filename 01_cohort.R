@@ -1,5 +1,6 @@
 
 
+
 # Cohort script for CLIF project validating risk tools in oncology.
 # Requires data_list to be loaded/validated from 00_*
 
@@ -260,7 +261,7 @@ if (nrow(dup_deaths) > 0) {
   encdrop = 
     fsubset(dup_deaths, counter == 1) |>
     pull(joined_hosp_id) 
-
+  
   cohort  = fsubset(cohort, !joined_hosp_id %in% encdrop)
   n_dupes = sum(dup_deaths$counter > 1)
   n_pats  = length(unique(dup_deaths$patient_id))
@@ -613,6 +614,10 @@ if (nrow(pt_dups) > 0) {
 
 cohort = 
   join(cohort, cohort_demographics, how = "left", multiple = F) |>
+  fmutate(miss_age   = as.integer(is.na(age))) |>
+  fmutate(miss_sex   = as.integer(is.na(sex_category)       | tolower(sex_category)       == "unknown")) |>
+  fmutate(miss_race  = as.integer(is.na(race_category)      | tolower(race_category)      == "unknown")) |>
+  fmutate(miss_eth   = as.integer(is.na(ethnicity_category) | tolower(ethnicity_category) == "unknown")) |>
   fmutate(age        = if_else(age > 90, 90.9, age)) |>
   fmutate(female_01  = if_else(tolower(sex_category) == "female", 1L, 0L)) |>
   fmutate(dead_01    = if_else(tolower(discharge_category) == "expired", 1L, 0L)) |>
@@ -864,7 +869,8 @@ cohort =
     ethnicity_category, 
     ends_with("01"),
     initial_code_status,
-    los_hosp_d
+    los_hosp_d,
+    starts_with("miss")
   ) |>
   mutate(across(
     .cols = ends_with("category"),
@@ -923,7 +929,9 @@ elix =
 vw        = comorbidity::score(elix, weights = "vw", assign0 = T)
 elix      = cbind(elix, vw = vw) |> fselect(joined_hosp_id, vw)
 cohort    = join(cohort, elix, how = "left", multiple = F)
-cohort$vw = if_else(is.na(cohort$vw), 0L, cohort$vw)
+
+cohort$miss_vw = as.integer(is.na(cohort$vw))
+cohort$vw      = if_else(is.na(cohort$vw), 0L, cohort$vw)
 
 rm(elix, vw); gc()
 
@@ -966,6 +974,33 @@ if (
 
 write_parquet(cohort,            here("proj_tables", "cohort.parquet"))
 write_parquet(hid_jid_crosswalk, here("proj_tables", "hid_jid_crosswalk.parquet"))
+
+# missingness characterization -------------------------------------------------
+
+miss_summary = 
+  fsubset(cohort, ed_admit_01 == 1) |>
+  fsummarize(
+    n_total     = fnobs(joined_hosp_id),
+    n_miss_age  = fsum(miss_age),
+    n_miss_sex  = fsum(miss_sex),
+    n_miss_race = fsum(miss_race),
+    n_miss_eth  = fsum(miss_eth),
+    n_miss_vw   = fsum(miss_vw)
+  )
+
+n_denom = miss_summary$n_total
+
+miss_summary = 
+  fselect(miss_summary, -n_total) |>
+  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") |>
+  ftransform(
+    variable    = str_remove(variable, "^n_miss_"),
+    n_total     = n_denom,
+    pct_missing = round(100 * n_missing / n_denom, 2),
+    site        = site_lowercase
+  )
+
+fwrite(miss_summary, here("upload_to_box", paste0("missing_demog_", site_lowercase, ".csv")))
 
 # t02. characteristics/outcomes by cancer status (0 = none, 1 = cancer) --------
 
@@ -1053,12 +1088,6 @@ t2_cat =
   ftransform(category = tolower(str_replace_all(as.character(val), "-", "_"))) |>
   fselect(ca_01, var, category, n) 
 
-t2_cat$category = case_when(
-  tolower(t2_cat$var) != "initial_code_status"  ~ tolower(t2_cat$category),
-  tolower(t2_cat$category) == "special/partial" ~ "other",
-  TRUE                                          ~ tolower(t2_cat$category)
-)
-             
 ## quality control -------------------------------------------------------------
 
 ### check for sample size mismatch in continuous table -------------------------
