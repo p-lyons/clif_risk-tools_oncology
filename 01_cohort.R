@@ -854,10 +854,12 @@ imv_encs =
 
 cohort = 
   funique(cohort) |>
-  fmutate(wicu_01 = if_else(joined_hosp_id %in% ward_icu_tx, 1L, 0L, 0L)) |>
-  fmutate(icu_01  = if_else(joined_hosp_id %in% icu_encs,    1L, 0L, 0L)) |>
-  fmutate(imv_01  = if_else(joined_hosp_id %in% imv_encs,    1L, 0L, 0L)) |>
-  fmutate(va_01   = if_else(joined_hosp_id %in% va_encs,     1L, 0L, 0L)) |>
+  fmutate(wicu_01 = if_else(joined_hosp_id %in% ward_icu_tx,  1L, 0L, 0L)) |>
+  fmutate(icu_01  = if_else(joined_hosp_id %in% icu_encs,     1L, 0L, 0L)) |>
+  fmutate(imv_01  = if_else(joined_hosp_id %in% imv_encs,     1L, 0L, 0L)) |>
+  fmutate(va_01   = if_else(joined_hosp_id %in% va_encs,      1L, 0L, 0L)) |>
+  fmutate(d_noicu_01 = if_else(dead_01 == 1    & icu_01 != 1, 1L, 0L, 0L)) |>
+  fmutate(h_noicu_01 = if_else(hospice_01 == 1 & icu_01 != 1, 1L, 0L, 0L)) |>
   select(
     patient_id, 
     joined_hosp_id, 
@@ -1001,6 +1003,8 @@ miss_summary =
   )
 
 fwrite(miss_summary, here("upload_to_box", paste0("missing_demog_", site_lowercase, ".csv")))
+
+cohort = select(cohort, -starts_with("miss_"))
 
 # t02. characteristics/outcomes by cancer status (0 = none, 1 = cancer) --------
 
