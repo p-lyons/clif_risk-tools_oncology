@@ -310,6 +310,11 @@ date_frame  = select(cohort, patient_id, joined_hosp_id, ends_with("dttm"))
 
 ### load cancer dx codes -------------------------------------------------------
 
+additional_drops = c(
+    "D72.11", "D72.110", "D72.111", "D72.118", "D72.119",
+    "D47.9", "D47.Z9", "D45", "D47.3", "D47.02" 
+)
+
 ca_codes = 
   readxl::read_xlsx(here("config/icd10cm_casefinding_2023.xlsx")) |> #### exclude C44, in remission 
   janitor::clean_names() |>
@@ -317,6 +322,7 @@ ca_codes =
   fsubset(is.na(drop) | drop != "drop") |>
   fsubset(!str_detect(icd_10_cm_code_specific, "^Z85")) |>
   fsubset(!str_detect(icd_10_cm_code_definition, "in remission|personal history")) |>
+  fsubset(!icd_10_cm_code_specific %in% additional_drops) |>
   fmutate(liquid_01 = if_else(general_category == "Hematopoietic neoplasm", 1L, 0L)) |>
   fselect(diagnosis_code = icd_10_cm_code_specific, liquid_01)
 
@@ -412,7 +418,7 @@ fwrite(
 fig_s01_01ca = fsubset(cohort, ca_01 == 1) |> fselect(joined_hosp_id) |> fnunique()
 fig_s01_01no = fsubset(cohort, ca_01 == 0) |> fselect(joined_hosp_id) |> fnunique()
 
-rm(diagnosis_priority, dx_enc, dx); gc()
+rm(diagnosis_priority, dx_enc, dx, additional_drops); gc()
 
 ## enforce admissions through ED -----------------------------------------------
 
