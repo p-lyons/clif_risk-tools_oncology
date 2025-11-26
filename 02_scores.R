@@ -302,6 +302,53 @@ labs =
   select(joined_hosp_id, time, starts_with("sirs")) |>
   fsubset(!is.na(sirs_wbc) | !is.na(sirs_co2))
 
+# missingness characterization (encounter-level) -------------------------------
+
+message("\n== Characterizing encounter-level missingness for vitals/labs ==")
+
+## scope: ED admits only
+scope_encs = fsubset(cohort, ed_admit_01 == 1)$joined_hosp_id
+
+## check which encounters have ≥1 measurement of each type
+
+# vitals - just need joined_hosp_id presence in each list element
+has_hr   = funique(vitals_list$heart_rate$joined_hosp_id)
+has_rr   = funique(vitals_list$respiratory_rate$joined_hosp_id)
+has_temp = funique(vitals_list$temp_c$joined_hosp_id)
+has_spo2 = funique(vitals_list$spo2$joined_hosp_id)
+has_gcs  = funique(vitals_list$gcs$joined_hosp_id)
+
+# wbc - check labs before the pivot
+has_wbc = 
+  fsubset(labs, !is.na(sirs_wbc)) |>
+  fselect(joined_hosp_id) |>
+  funique() |>
+  tibble::deframe()
+
+## summarize
+n_total = length(scope_encs)
+
+miss_vitals_labs = tidytable(
+  variable  = c("heart_rate", "resp_rate", "temp", "spo2", "gcs", "wbc"),
+  n_total   = n_total,
+  n_missing = c(
+    sum(!scope_encs %in% has_hr),
+    sum(!scope_encs %in% has_rr),
+    sum(!scope_encs %in% has_temp),
+    sum(!scope_encs %in% has_spo2),
+    sum(!scope_encs %in% has_gcs),
+    sum(!scope_encs %in% has_wbc)
+  )
+) |>
+  ftransform(
+    pct_missing = round(100 * n_missing / n_total, 2),
+    site        = site_lowercase
+  )
+
+fwrite(miss_vitals_labs,here("upload_to_box", paste0("missing_vlab_", site_lowercase, ".csv")))
+
+rm(has_hr, has_rr, has_temp, has_spo2, has_gcs, has_wbc, miss_vitals_labs)
+
 # combine score components -----------------------------------------------------
 
 scores = 
