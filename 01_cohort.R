@@ -640,6 +640,8 @@ rm(pt_dups, cohort_demographics); gc()
 
 ## admission code status -------------------------------------------------------
 
+code_window_hours = 12L
+
 codes = 
   data_list[["code_status"]] |>
   dplyr::select(patient_id, start_dttm, code_status_category) |>
@@ -649,21 +651,22 @@ codes =
 codes = 
   join(cohort, codes, how = "left", multiple = T) |>
   fsubset(start_dttm >= admission_dttm - lubridate::ddays(1)) |>
-  fsubset(start_dttm <= discharge_dttm) |>
+  fsubset(start_dttm <= admission_dttm + lubridate::dhours(code_window_hours)) |>
   roworder(start_dttm) |>
   fgroup_by(joined_hosp_id) |>
-  fsummarize(initial_code_status = ffirst(code_status_category)) |>
-  fmutate(
+  fsummarize(initial_code_status = flast(code_status_category))
+
+cohort = 
+  join(cohort, codes, how = "left", multiple = F) |>
+  ftransform(
     initial_code_status = case_when(
-      tolower(initial_code_status) == "dnr" ~ "other", 
-      is.na(initial_code_status)            ~ "unspecified",
+      tolower(initial_code_status) == "dnr" ~ "other",
+      is.na(initial_code_status)            ~ "presume_full",
       TRUE                                  ~ tolower(initial_code_status)
     )
   )
 
-cohort = join(cohort, codes, how = "left", multiple = F)
-
-rm(codes); gc()
+rm(codes, code_window_hours); gc()
 
 # outcomes ---------------------------------------------------------------------
 
