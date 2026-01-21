@@ -1099,7 +1099,8 @@ t2_cat =
   fnobs() |>
   ftransform(var      = str_remove(var, "_01")) |>
   ftransform(category = tolower(str_replace_all(as.character(val), "-", "_"))) |>
-  fselect(ca_01, var, category, n) 
+  fselect(ca_01, var, category, n) |>
+  rowbind(elix_cat)
 
 ## quality control -------------------------------------------------------------
 
