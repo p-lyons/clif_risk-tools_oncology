@@ -30,6 +30,7 @@ make_y = function(h_to_event, horizon) {
 #' Build consistent filename for artifacts
 #' Pattern: {artifact}[-{strata}][-h{horizon}][-{variant}]-{site}.csv
 #' All components except artifact and site are optional
+#' 
 .build_filename = function(artifact, site, strata = NULL, horizon = NULL, variant = NULL) {
   
   stopifnot(nzchar(artifact), nzchar(site))
@@ -39,15 +40,12 @@ make_y = function(h_to_event, horizon) {
   if (!is.null(strata) && nzchar(strata)) {
     parts = paste0(parts, "-", strata)
   }
-  
   if (!is.null(horizon) && !is.na(horizon)) {
     parts = paste0(parts, "-h", horizon)
   }
-  
   if (!is.null(variant) && nzchar(variant)) {
     parts = paste0(parts, "-", variant)
   }
-  
   paste0(parts, "-", site, ".csv")
 }
 
@@ -65,7 +63,6 @@ write_artifact = function(df, analysis, artifact, site,
   
   message("    Writing: ", path)
   fwrite(df, path)
-  
   invisible(path)
 }
 
