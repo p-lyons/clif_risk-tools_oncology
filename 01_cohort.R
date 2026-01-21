@@ -298,8 +298,8 @@ if (nrow(post_death_admissions) > 0) {
 
 message("✅ Cleaned duplicate deaths and post-death encounters.")
 
-rm(dupes, dup_deaths, death_times, post_death_admissions, start_date, end_date)
-rm(encdrop, file_type, n_dupes, n_pats); gc()
+suppressWarnings(rm(dupes, dup_deaths, death_times, post_death_admissions))
+suppressWarnings(rm(, start_date, end_date, encdrop, file_type, n_dupes, n_pats)); gc()
 
 cohort_pats = funique(cohort$patient_id)
 cohort_jids = funique(cohort$joined_hosp_id)
