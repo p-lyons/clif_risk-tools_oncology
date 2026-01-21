@@ -1131,6 +1131,7 @@ keep = c(
   "ward_times",
   "req_vitals",
   "req_labs",
+  "start_time",
   "run_log"
 )
 
