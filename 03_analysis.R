@@ -9,7 +9,7 @@ THRESHOLDS = tidytable(
 
 HORIZONS = c(12L, 24L)
 
-VARIANTS = c("main", "se_no_ed_req", "se_fullcode_only", "se_win0_120h", "se_one_enc_per_pt")
+VARIANTS = c("main", "se_no_ed_req", "se_fullcode_only", "se_win0_96h", "se_one_enc_per_pt")
 
 # cleaner allowed artifacts list
 .allowed = list(
@@ -98,8 +98,8 @@ materialize_variant_long = function(variant, scores_long_base, scores, fc) {
     se_fullcode_only = {
       dt = dt[ed_admit_01 == 1L & fullcode_01 == 1L]
     },
-    se_win0_120h = {
-      dt = dt[ed_admit_01 == 1L & h_from_admit >= 0 & h_from_admit <= 120]
+    se_win0_96h = {
+      dt = dt[ed_admit_01 == 1L & h_from_admit >= 0 & h_from_admit <= 96]
     },
     se_one_enc_per_pt = {
       enc_tbl   = funique(select(scores, joined_hosp_id, patient_id, ed_admit_01))
@@ -130,9 +130,9 @@ materialize_variant_max = function(variant, scores, cohort, fc) {
       fc_encs = fsubset(cohort, tolower(initial_code_status) == "full")$joined_hosp_id
       fsubset(scores, ed_admit_01 == 1L & joined_hosp_id %in% fc_encs)
     },
-    se_win0_120h = {
-      # KEY FIX: filter to 0-120h BEFORE taking max
-      fsubset(scores, ed_admit_01 == 1L & h_from_admit >= 0 & h_from_admit <= 120)
+    se_win0_96h = {
+      # KEY FIX: filter to 0-96h BEFORE taking max
+      fsubset(scores, ed_admit_01 == 1L & h_from_admit >= 0 & h_from_admit <= 96)
     },
     se_one_enc_per_pt = {
       enc_tbl   = funique(select(scores, joined_hosp_id, patient_id, ed_admit_01))
@@ -199,7 +199,7 @@ run_horizon_counts = function(dt, horizons, site_lowercase) {
   rbindlist(counts_list, use.names = TRUE)[]
 }
 
-run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 400L) {
+run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 100L) {
   
   set.seed(2025L)
   boot_list = vector("list", B)
@@ -606,7 +606,7 @@ for (v in VARIANTS) {
   
   # bootstrap counts
   message("  Computing bootstrap counts...")
-  counts_boot = run_horizon_counts_bootstrap(dt_long, HORIZONS, site_lowercase, B = 400L)
+  counts_boot = run_horizon_counts_bootstrap(dt_long, HORIZONS, site_lowercase, B = 100L)
   
   for (HH in HORIZONS) {
     write_artifact(
