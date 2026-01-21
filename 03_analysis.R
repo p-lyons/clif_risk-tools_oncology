@@ -196,7 +196,7 @@ run_horizon_counts = function(dt, horizons, site_lowercase) {
   rbindlist(counts_list, use.names = TRUE)[]
 }
 
-run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 100L) {
+run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 400L) {
   
   set.seed(2025L)
   boot_list = vector("list", B)
@@ -603,7 +603,7 @@ for (v in VARIANTS) {
   
   # bootstrap counts
   message("  Computing bootstrap counts...")
-  counts_boot = run_horizon_counts_bootstrap(dt_long, HORIZONS, site_lowercase, B = 100L)
+  counts_boot = run_horizon_counts_bootstrap(dt_long, HORIZONS, site_lowercase, B = 400L)
   
   for (HH in HORIZONS) {
     write_artifact(
