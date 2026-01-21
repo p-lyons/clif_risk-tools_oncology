@@ -1130,7 +1130,8 @@ keep = c(
   "hid_jid_crosswalk",
   "ward_times",
   "req_vitals",
-  "req_labs"
+  "req_labs",
+  "run_log"
 )
 
 rm(list = setdiff(ls(), keep)); gc()
