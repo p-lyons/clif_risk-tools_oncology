@@ -6,13 +6,9 @@
 library(flextable)
 library(officer)
 
-# output directories -----------------------------------------------------------
-
-fig_dir = here::here("output", "figures")
-tbl_dir = here::here("output", "tables")
-
-if (!dir.exists(fig_dir)) dir.create(fig_dir, recursive = TRUE)
-if (!dir.exists(tbl_dir)) dir.create(tbl_dir, recursive = TRUE)
+# Ensure output directories exist
+if (!dir.exists(here("output", "tables")))  dir.create(here("output", "tables"),  recursive = TRUE)
+if (!dir.exists(here("output", "figures"))) dir.create(here("output", "figures"), recursive = TRUE)
 
 # TABLE 1: FLOW DIAGRAM (Figure S1) --------------------------------------------
 
@@ -117,7 +113,7 @@ diagram_code = paste0(diagram_code, "}")
 flow_diagram = grViz(diagram_code)
 
 # Save flow diagram
-export_svg(flow_diagram) |> charToRaw() |> rsvg::rsvg_pdf(file.path(fig_dir, paste0("figS1_flow_", today, ".pdf")))
+export_svg(flow_diagram) |> charToRaw() |> rsvg::rsvg_pdf(here("output", "figures", paste0("figure_s01_flow_", today, ".pdf")))
 
 # TABLE 2: CHARACTERISTICS -----------------------------------------------------
 
@@ -338,7 +334,7 @@ setnames(table2, "display", "Variable")
 message("  Table 2 created with ", nrow(table2), " rows")
 
 ft2 = flextable(table2) |> autofit()
-save_as_docx(ft2, path = file.path(tbl_dir, paste0("table2_characteristics_", today, ".docx")))
+save_as_docx(ft2, path = here("output", "tables", paste0("table2_characteristics_", today, ".docx")))
 
 # TABLE 3: OUTCOMES ------------------------------------------------------------
 
@@ -465,9 +461,25 @@ setorder(table3, sort_key, category, na.last = FALSE)
 los_header = table3[var == "los" &  is.na(category)]
 los_cats   = table3[var == "los" & !is.na(category)]
 los_cats   = los_cats[match(c("< 2 days", "2-4 days", "4-7 days", "7-14 days", "> 14 days"), category)]
+
+# Ensure LOS header row exists with proper display
+if (nrow(los_header) == 0) {
+  # Create header row if missing
+  los_header = data.table(
+    var      = "los",
+    category = NA_character_,
+    label    = "Length of stay, n (%)",
+    display  = "Length of stay, n (%)",
+    sort_key = 7L
+  )
+} else {
+  # Make sure display is set correctly for header
+  los_header[, display := "Length of stay, n (%)"]
+}
+
 other_rows = table3[var != "los"]
 setorder(other_rows, sort_key, category, na.last = FALSE)
-table3 = rbindlist(list(other_rows, los_header, los_cats))
+table3 = rbindlist(list(other_rows, los_header, los_cats), fill = TRUE)
 
 table3[, is_first   := !duplicated(var)]
 table3[, p_display  := fifelse(is_first == TRUE, sprintf("%.3f", p_value), NA_character_)]
@@ -478,7 +490,7 @@ setnames(table3, "display", "Variable")
 message("  Table 3 created with ", nrow(table3), " rows")
 
 ft3 = flextable(table3) |> autofit()
-save_as_docx(ft3, path = file.path(tbl_dir, paste0("table3_outcomes_", today, ".docx")))
+save_as_docx(ft3, path = here("output", "tables", paste0("table3_outcomes_", today, ".docx")))
 
 # exports ----------------------------------------------------------------------
 
