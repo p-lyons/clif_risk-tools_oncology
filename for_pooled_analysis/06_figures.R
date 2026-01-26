@@ -88,47 +88,57 @@ message("\n== Creating Figure 2: AUROC Forest Plot ==")
 # Use site-level meta results if available, otherwise weighted
 if (exists("auroc_results_final") && nrow(auroc_results_final) > 0) {
   fig2_data = auroc_results_final[analysis == "main"]
-} else {
+} else if (exists("auroc_weighted_final") && nrow(auroc_weighted_final) > 0) {
   fig2_data = auroc_weighted_final[analysis == "main"]
+} else if (exists("auroc_meta_final") && nrow(auroc_meta_final) > 0) {
+  fig2_data = auroc_meta_final[analysis == "main"]
+} else {
+  message("  WARNING: No AUROC data available for Figure 2")
+  fig2_data = data.table()
 }
 
-fig2_data[, ca_lab := fifelse(ca_01 == 1, "Cancer", "Non-cancer")]
-fig2_data[, score_lab := factor(score_name, levels = names(SCORE_LABS), labels = SCORE_LABS)]
-
-fig2 = ggplot(fig2_data, aes(x = auroc, y = score_lab, color = ca_lab)) +
-  geom_vline(xintercept = 0.5, linetype = "dashed", color = "gray60", linewidth = 0.5) +
-  geom_vline(xintercept = 0.7, linetype = "dotted", color = "gray80", linewidth = 0.5) +
-  geom_pointrange(
-    aes(xmin = ci_lower, xmax = ci_upper),
-    position = position_dodge(width = 0.6),
-    size     = 0.7,
-    fatten   = 3
-  ) +
-  scale_color_manual(values = pal_cancer, name = NULL) +
-  scale_x_continuous(
-    limits = c(0.5, 0.85),
-    breaks = seq(0.5, 0.85, 0.05),
-    expand = c(0.02, 0)
-  ) +
-  facet_wrap(~ metric_lab, ncol = 2) +
-  labs(
-    x        = "AUROC (95% CI)",
-    y        = NULL,
-    title    = "Discrimination of Early Warning Scores",
-    subtitle = "Random-effects meta-analysis of site-level AUROCs"
-  ) +
-  theme_paper +
-  theme(
-    legend.position    = "top",
-    panel.grid.major.y = element_blank()
-  )
-
-ggsave(here("output", "figures", "fig2_auroc_forest.pdf"), fig2,
-       width = 10, height = 5, dpi = 300)
-ggsave(here("output", "figures", "fig2_auroc_forest.png"), fig2,
-       width = 10, height = 5, dpi = 300)
-
-message("  Figure 2 saved")
+if (nrow(fig2_data) > 0) {
+  
+  fig2_data[, ca_lab := fifelse(ca_01 == 1, "Cancer", "Non-cancer")]
+  fig2_data[, score_lab := factor(score_name, levels = names(SCORE_LABS), labels = SCORE_LABS)]
+  
+  fig2 = ggplot(fig2_data, aes(x = auroc, y = score_lab, color = ca_lab)) +
+    geom_vline(xintercept = 0.5, linetype = "dashed", color = "gray60", linewidth = 0.5) +
+    geom_vline(xintercept = 0.7, linetype = "dotted", color = "gray80", linewidth = 0.5) +
+    geom_pointrange(
+      aes(xmin = ci_lower, xmax = ci_upper),
+      position = position_dodge(width = 0.6),
+      size     = 0.7,
+      fatten   = 3
+    ) +
+    scale_color_manual(values = pal_cancer, name = NULL) +
+    scale_x_continuous(
+      limits = c(0.5, 0.85),
+      breaks = seq(0.5, 0.85, 0.05),
+      expand = c(0.02, 0)
+    ) +
+    facet_wrap(~ metric_lab, ncol = 2) +
+    labs(
+      x        = "AUROC (95% CI)",
+      y        = NULL,
+      title    = "Discrimination of Early Warning Scores",
+      subtitle = "Random-effects meta-analysis of site-level AUROCs"
+    ) +
+    theme_paper +
+    theme(
+      legend.position    = "top",
+      panel.grid.major.y = element_blank()
+    )
+  
+  ggsave(here("output", "figures", "fig2_auroc_forest.pdf"), fig2,
+         width = 10, height = 5, dpi = 300)
+  ggsave(here("output", "figures", "fig2_auroc_forest.png"), fig2,
+         width = 10, height = 5, dpi = 300)
+  
+  message("  Figure 2 saved")
+} else {
+  message("  Figure 2 skipped - no data")
+}
 
 # ==============================================================================
 # FIGURE 3: Sensitivity Analysis Forest Plot (Faceted by Score)
@@ -137,46 +147,56 @@ message("  Figure 2 saved")
 message("\n== Creating Figure 3: Sensitivity Analysis Forest Plot ==")
 
 # Get all analysis variants for encounter-level
-fig3_data = auroc_results_final[metric == "Encounter max" & !is.na(auroc)]
-fig3_data[, ca_lab := fifelse(ca_01 == 1, "Cancer", "Non-cancer")]
-fig3_data[, score_lab := factor(score_name, levels = names(SCORE_LABS), labels = SCORE_LABS)]
-fig3_data[, analysis_lab := factor(analysis, 
-                                    levels = c("main", "fullcode_only", "no_ed_req", "win0_96h", "one_enc_per_pt"),
-                                    labels = c("Main", "Full-code only", "No ED req.", "0-96h window", "1 enc/patient"))]
+if (exists("auroc_results_final") && nrow(auroc_results_final) > 0) {
+  fig3_data = auroc_results_final[metric == "Encounter max" & !is.na(auroc)]
+} else {
+  fig3_data = data.table()
+}
 
-fig3 = ggplot(fig3_data, aes(x = auroc, y = analysis_lab, color = ca_lab)) +
-  geom_vline(xintercept = 0.5, linetype = "dashed", color = "gray60", linewidth = 0.4) +
-  geom_pointrange(
-    aes(xmin = ci_lower, xmax = ci_upper),
-    position = position_dodge(width = 0.6),
-    size     = 0.5,
-    fatten   = 2.5
-  ) +
-  scale_color_manual(values = pal_cancer, name = NULL) +
-  scale_x_continuous(
-    limits = c(0.5, 0.85),
-    breaks = seq(0.5, 0.85, 0.1)
-  ) +
-  facet_wrap(~ score_lab, ncol = 3) +
-  labs(
-    x        = "AUROC (95% CI)",
-    y        = NULL,
-    title    = "Sensitivity Analyses",
-    subtitle = "Encounter-level discrimination across analysis variants"
-  ) +
-  theme_paper +
-  theme(
-    legend.position    = "top",
-    panel.grid.major.y = element_blank(),
-    strip.text         = element_text(size = 9)
-  )
-
-ggsave(here("output", "figures", "fig3_sensitivity_forest.pdf"), fig3,
-       width = 11, height = 7, dpi = 300)
-ggsave(here("output", "figures", "fig3_sensitivity_forest.png"), fig3,
-       width = 11, height = 7, dpi = 300)
-
-message("  Figure 3 saved")
+if (nrow(fig3_data) > 0) {
+  
+  fig3_data[, ca_lab := fifelse(ca_01 == 1, "Cancer", "Non-cancer")]
+  fig3_data[, score_lab := factor(score_name, levels = names(SCORE_LABS), labels = SCORE_LABS)]
+  fig3_data[, analysis_lab := factor(analysis, 
+                                      levels = c("main", "fullcode_only", "no_ed_req", "win0_96h", "one_enc_per_pt"),
+                                      labels = c("Main", "Full-code only", "No ED req.", "0-96h window", "1 enc/patient"))]
+  
+  fig3 = ggplot(fig3_data, aes(x = auroc, y = analysis_lab, color = ca_lab)) +
+    geom_vline(xintercept = 0.5, linetype = "dashed", color = "gray60", linewidth = 0.4) +
+    geom_pointrange(
+      aes(xmin = ci_lower, xmax = ci_upper),
+      position = position_dodge(width = 0.6),
+      size     = 0.5,
+      fatten   = 2.5
+    ) +
+    scale_color_manual(values = pal_cancer, name = NULL) +
+    scale_x_continuous(
+      limits = c(0.5, 0.85),
+      breaks = seq(0.5, 0.85, 0.1)
+    ) +
+    facet_wrap(~ score_lab, ncol = 3) +
+    labs(
+      x        = "AUROC (95% CI)",
+      y        = NULL,
+      title    = "Sensitivity Analyses",
+      subtitle = "Encounter-level discrimination across analysis variants"
+    ) +
+    theme_paper +
+    theme(
+      legend.position    = "top",
+      panel.grid.major.y = element_blank(),
+      strip.text         = element_text(size = 9)
+    )
+  
+  ggsave(here("output", "figures", "fig3_sensitivity_forest.pdf"), fig3,
+         width = 11, height = 7, dpi = 300)
+  ggsave(here("output", "figures", "fig3_sensitivity_forest.png"), fig3,
+         width = 11, height = 7, dpi = 300)
+  
+  message("  Figure 3 saved")
+} else {
+  message("  Figure 3 skipped - no data")
+}
 
 # ==============================================================================
 # FIGURE 4: Meta-Analysis Forest Plot (Interaction Terms)
@@ -234,8 +254,31 @@ message("\n== Creating Figure 5: Cumulative Incidence ==")
 if (exists("cuminc_final") && nrow(cuminc_final) > 0) {
   
   fig5_data = copy(cuminc_final)
-  fig5_data[, ca_lab := fifelse(ca_01 == 1, "Cancer", "Non-cancer")]
-  fig5_data[, score_lab := factor(score_name, levels = names(SCORE_LABS), labels = SCORE_LABS)]
+  
+  # Check which column name is used for score
+  if ("score_name" %in% names(fig5_data)) {
+    fig5_data[, score_lab := factor(score_name, levels = names(SCORE_LABS), labels = SCORE_LABS)]
+  } else if ("score" %in% names(fig5_data)) {
+    fig5_data[, score_lab := factor(score, levels = names(SCORE_LABS), labels = SCORE_LABS)]
+  } else if ("score_lab" %in% names(fig5_data)) {
+    # Already has score_lab
+  } else {
+    message("  WARNING: Cannot find score column in cuminc_final")
+    fig5_data = data.table()
+  }
+  
+  # Check for ca_lab or create it
+  if (!"ca_lab" %in% names(fig5_data) && "ca_01" %in% names(fig5_data)) {
+    fig5_data[, ca_lab := fifelse(ca_01 == 1, "Cancer", "Non-cancer")]
+  }
+  
+  # Check for outcome_lab or create it
+  if (!"outcome_lab" %in% names(fig5_data) && "o_primary_01" %in% names(fig5_data)) {
+    fig5_data[, outcome_lab := fifelse(o_primary_01 == 1, "With deterioration", "Without deterioration")]
+  }
+}
+
+if (exists("fig5_data") && nrow(fig5_data) > 0 && "score_lab" %in% names(fig5_data)) {
   
   fig5 = ggplot(fig5_data, 
                 aes(x = time_bin_start / 24, y = cum_inc, 
