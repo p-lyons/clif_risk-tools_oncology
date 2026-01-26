@@ -79,7 +79,7 @@ message("  Output directories ready\n")
 
 message("== Loading data ==\n")
 
-source(here::here("code_pooled", "00_load.R"))
+source(here::here("_code", "00_load.R"))
 
 message("")
 
@@ -98,7 +98,7 @@ if (RUN_TABLES) {
   t1 = Sys.time()
   
   tryCatch({
-    source(here::here("code_pooled", "01_tables.R"))
+    source(here::here("_code", "01_tables.R"))
     run_log$tables = list(status = "success", time = Sys.time() - t1)
     message("\n  ✓ 01_tables.R complete (", round(difftime(Sys.time(), t1, units = "secs"), 1), " sec)\n")
   }, error = function(e) {
@@ -121,7 +121,7 @@ if (RUN_DISCRIMINATION) {
   t1 = Sys.time()
   
   tryCatch({
-    source(here::here("code_pooled", "02_discrimination.R"))
+    source(here::here("_code", "02_discrimination.R"))
     run_log$discrimination = list(status = "success", time = Sys.time() - t1)
     message("\n  ✓ 02_discrimination.R complete (", round(difftime(Sys.time(), t1, units = "secs"), 1), " sec)\n")
   }, error = function(e) {
@@ -144,7 +144,7 @@ if (RUN_THRESHOLD) {
   t1 = Sys.time()
   
   tryCatch({
-    source(here::here("code_pooled", "03_threshold.R"))
+    source(here::here("_code", "03_threshold.R"))
     run_log$threshold = list(status = "success", time = Sys.time() - t1)
     message("\n  ✓ 03_threshold.R complete (", round(difftime(Sys.time(), t1, units = "secs"), 1), " sec)\n")
   }, error = function(e) {
@@ -167,7 +167,7 @@ if (RUN_META) {
   t1 = Sys.time()
   
   tryCatch({
-    source(here::here("code_pooled", "04_meta.R"))
+    source(here::here("_code", "04_meta.R"))
     run_log$meta = list(status = "success", time = Sys.time() - t1)
     message("\n  ✓ 04_meta.R complete (", round(difftime(Sys.time(), t1, units = "secs"), 1), " sec)\n")
   }, error = function(e) {
@@ -190,7 +190,7 @@ if (RUN_SUBGROUPS) {
   t1 = Sys.time()
   
   tryCatch({
-    source(here::here("code_pooled", "05_subgroups.R"))
+    source(here::here("_code", "05_subgroups.R"))
     run_log$subgroups = list(status = "success", time = Sys.time() - t1)
     message("\n  ✓ 05_subgroups.R complete (", round(difftime(Sys.time(), t1, units = "secs"), 1), " sec)\n")
   }, error = function(e) {
@@ -213,7 +213,7 @@ if (RUN_FIGURES) {
   t1 = Sys.time()
   
   tryCatch({
-    source(here::here("code_pooled", "06_figures.R"))
+    source(here::here("_code", "06_figures.R"))
     run_log$figures = list(status = "success", time = Sys.time() - t1)
     message("\n  ✓ 06_figures.R complete (", round(difftime(Sys.time(), t1, units = "secs"), 1), " sec)\n")
   }, error = function(e) {
