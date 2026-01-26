@@ -11,13 +11,6 @@ library(patchwork)
 library(scales)
 library(data.table)
 
-# Run all analysis scripts to get data objects
-source(here::here("code_pooled", "01_tables.R"))
-source(here::here("code_pooled", "02_discrimination.R"))
-source(here::here("code_pooled", "03_threshold.R"))
-source(here::here("code_pooled", "04_meta.R"))
-source(here::here("code_pooled", "05_subgroups.R"))
-
 # create output directory ------------------------------------------------------
 
 if (!dir.exists(here("output", "figures"))) {
