@@ -8,8 +8,6 @@
 library(pROC)
 library(ggplot2)
 
-source(here::here("code_pooled", "00_load.R"))
-
 # SITE-LEVEL AUROCs ------------------------------------------------------------
 
 message("\n== Site-level AUROCs ==")
