@@ -8,8 +8,6 @@
 
 library(ggplot2)
 
-source(here::here("code_pooled", "00_load.R"))
-
 # SENSITIVITY / SPECIFICITY AT STANDARD THRESHOLDS -----------------------------
 
 message("\n== Sensitivity/Specificity at standard thresholds ==")
