@@ -9,8 +9,6 @@
 library(metafor)
 library(ggplot2)
 
-source(here::here("code_pooled", "00_load.R"))
-
 # LOAD AND CHECK DATA ----------------------------------------------------------
 
 message("\n== Loading meta-analysis inputs ==")
