@@ -13,10 +13,10 @@ VARIANTS = c("main", "se_no_ed_req", "se_fullcode_only", "se_win0_96h", "se_one_
 
 # cleaner allowed artifacts list
 .allowed = list(
-  main        = c("maxscores"),
+  main        = c("maxscores", "auroc"),
   threshold   = c("ever", "sesp", "cuminc", "first", "upset"),
-  sensitivity = c("maxscores", "counts"),
-  horizon     = c("counts"),
+  sensitivity = c("maxscores", "counts", "auroc"),
+  horizon     = c("counts", "auroc"),
   diagnostics = c("overall", "by_cancer", "max_scores"),
   meta        = c("coefficients", "score_sds")
 )
@@ -25,6 +25,97 @@ VARIANTS = c("main", "se_no_ed_req", "se_fullcode_only", "se_win0_96h", "se_one_
 
 make_y = function(h_to_event, horizon) {
   as.integer(!is.na(h_to_event) & h_to_event >= 0 & h_to_event <= horizon)
+}
+
+#' Compute site-level AUROC with DeLong CI
+#' Works on unaggregated (row-level) data
+#' @param dt data.table with columns: score_name, ca_01, value/max_value, outcome
+#' @param score_col name of score value column
+#' @param site_lowercase site identifier
+#' @return data.table with AUROC, SE, CI for each score × cancer combination
+compute_site_auroc = function(dt, score_col = "value", site_lowercase) {
+  
+  library(pROC)
+  
+  combos = unique(dt[, .(score_name, ca_01)])
+  
+  results = lapply(seq_len(nrow(combos)), function(i) {
+    
+    sc = combos$score_name[i]
+    ca = combos$ca_01[i]
+    
+    sub = dt[score_name == sc & ca_01 == ca]
+    
+    n_obs    = nrow(sub)
+    n_events = sum(sub$outcome == 1L, na.rm = TRUE)
+    
+    # need both outcomes present
+    if (n_events == 0 || n_events == n_obs) {
+      return(data.table(
+        score_name = sc,
+        ca_01      = ca,
+        n_obs      = n_obs,
+        n_events   = n_events,
+        auroc      = NA_real_,
+        auroc_se   = NA_real_,
+        ci_lower   = NA_real_,
+        ci_upper   = NA_real_,
+        site       = site_lowercase
+      ))
+    }
+    
+    roc_obj = tryCatch(
+      roc(sub$outcome, sub[[score_col]], levels = c(0, 1), direction = "<", quiet = TRUE),
+      error = function(e) NULL
+    )
+    
+    if (is.null(roc_obj)) {
+      return(data.table(
+        score_name = sc,
+        ca_01      = ca,
+        n_obs      = n_obs,
+        n_events   = n_events,
+        auroc      = NA_real_,
+        auroc_se   = NA_real_,
+        ci_lower   = NA_real_,
+        ci_upper   = NA_real_,
+        site       = site_lowercase
+      ))
+    }
+    
+    auc_val = as.numeric(auc(roc_obj))
+    
+    # DeLong CI
+    ci_obj = tryCatch(
+      ci.auc(roc_obj, method = "delong"),
+      error = function(e) NULL
+    )
+    
+    if (!is.null(ci_obj)) {
+      ci_lo = as.numeric(ci_obj[1])
+      ci_hi = as.numeric(ci_obj[3])
+      # back-calculate SE from CI (CI = AUC ± 1.96*SE)
+      auroc_se = (ci_hi - ci_lo) / (2 * 1.96)
+    } else {
+      ci_lo    = NA_real_
+      ci_hi    = NA_real_
+      auroc_se = NA_real_
+    }
+    
+    data.table(
+      score_name = sc,
+      ca_01      = ca,
+      n_obs      = n_obs,
+      n_events   = n_events,
+      auroc      = auc_val,
+      auroc_se   = auroc_se,
+      ci_lower   = ci_lo,
+      ci_upper   = ci_hi,
+      site       = site_lowercase
+    )
+  })
+  
+  rbindlist(results, use.names = TRUE)
 }
 
 #' Build consistent filename for artifacts
@@ -601,6 +692,26 @@ for (v in VARIANTS) {
     )
   }
   
+  # horizon AUROCs (site-level with DeLong CI)
+  message("  Computing horizon AUROCs...")
+  for (HH in HORIZONS) {
+    dt_h = copy(dt_long)
+    dt_h[, outcome := make_y(h_to_event, HH)]
+    
+    auroc_h = compute_site_auroc(dt_h, score_col = "value", site_lowercase)
+    auroc_h[, horizon := HH]
+    
+    write_artifact(
+      df       = auroc_h,
+      analysis = if (v == "main") "horizon" else "sensitivity",
+      artifact = "auroc",
+      site     = site_lowercase,
+      strata   = "ca",
+      horizon  = HH,
+      variant  = if (v == "main") NULL else v
+    )
+  }
+  
   # bootstrap counts
   message("  Computing bootstrap counts...")
   counts_boot = run_horizon_counts_bootstrap(dt_long, HORIZONS, site_lowercase, B = 400L)
@@ -638,6 +749,20 @@ for (v in VARIANTS) {
       df       = dt_max_agg,
       analysis = if (v == "main") "main" else "sensitivity",
       artifact = "maxscores",
+      site     = site_lowercase,
+      strata   = "ca",
+      variant  = if (v == "main") NULL else v
+    )
+    
+    # encounter-level AUROCs (site-level with DeLong CI)
+    message("  Computing encounter-level AUROCs...")
+    auroc_max = compute_site_auroc(dt_max, score_col = "max_value", site_lowercase)
+    auroc_max[, metric := "encounter_max"]
+    
+    write_artifact(
+      df       = auroc_max,
+      analysis = if (v == "main") "main" else "sensitivity",
+      artifact = "auroc",
       site     = site_lowercase,
       strata   = "ca",
       variant  = if (v == "main") NULL else v
@@ -733,6 +858,115 @@ write_artifact(
   df       = counts_liquid_24h,
   analysis = "horizon",
   artifact = "counts",
+  site     = site_lowercase,
+  strata   = "liquid",
+  horizon  = 24L
+)
+
+# liquid/solid AUROCs - encounter-level
+message("  Computing liquid/solid AUROCs (encounter-level)...")
+auroc_liquid_max = dt_max_liquid[, {
+  
+  sub = .SD
+  n_obs    = nrow(sub)
+  n_events = sum(sub$outcome == 1L, na.rm = TRUE)
+  
+  if (n_events == 0 || n_events == n_obs) {
+    list(
+      n_obs    = n_obs,
+      n_events = n_events,
+      auroc    = NA_real_,
+      auroc_se = NA_real_,
+      ci_lower = NA_real_,
+      ci_upper = NA_real_
+    )
+  } else {
+    roc_obj = tryCatch(
+      pROC::roc(sub$outcome, sub$max_value, levels = c(0, 1), direction = "<", quiet = TRUE),
+      error = function(e) NULL
+    )
+    
+    if (is.null(roc_obj)) {
+      list(n_obs = n_obs, n_events = n_events, auroc = NA_real_, 
+           auroc_se = NA_real_, ci_lower = NA_real_, ci_upper = NA_real_)
+    } else {
+      auc_val = as.numeric(pROC::auc(roc_obj))
+      ci_obj  = tryCatch(pROC::ci.auc(roc_obj, method = "delong"), error = function(e) NULL)
+      
+      if (!is.null(ci_obj)) {
+        ci_lo    = as.numeric(ci_obj[1])
+        ci_hi    = as.numeric(ci_obj[3])
+        auroc_se = (ci_hi - ci_lo) / (2 * 1.96)
+      } else {
+        ci_lo = ci_hi = auroc_se = NA_real_
+      }
+      
+      list(n_obs = n_obs, n_events = n_events, auroc = auc_val,
+           auroc_se = auroc_se, ci_lower = ci_lo, ci_upper = ci_hi)
+    }
+  }
+}, by = .(score_name, liquid_01)]
+
+auroc_liquid_max[, `:=`(site = site_lowercase, metric = "encounter_max")]
+
+write_artifact(
+  df       = auroc_liquid_max,
+  analysis = "main",
+  artifact = "auroc",
+  site     = site_lowercase,
+  strata   = "liquid"
+)
+
+# liquid/solid AUROCs - 24h horizon
+message("  Computing liquid/solid AUROCs (24h horizon)...")
+auroc_liquid_24h = scores_long_cancer[, {
+  
+  sub = .SD
+  n_obs    = nrow(sub)
+  n_events = sum(sub$outcome == 1L, na.rm = TRUE)
+  
+  if (n_events == 0 || n_events == n_obs) {
+    list(
+      n_obs    = n_obs,
+      n_events = n_events,
+      auroc    = NA_real_,
+      auroc_se = NA_real_,
+      ci_lower = NA_real_,
+      ci_upper = NA_real_
+    )
+  } else {
+    roc_obj = tryCatch(
+      pROC::roc(sub$outcome, sub$value, levels = c(0, 1), direction = "<", quiet = TRUE),
+      error = function(e) NULL
+    )
+    
+    if (is.null(roc_obj)) {
+      list(n_obs = n_obs, n_events = n_events, auroc = NA_real_, 
+           auroc_se = NA_real_, ci_lower = NA_real_, ci_upper = NA_real_)
+    } else {
+      auc_val = as.numeric(pROC::auc(roc_obj))
+      ci_obj  = tryCatch(pROC::ci.auc(roc_obj, method = "delong"), error = function(e) NULL)
+      
+      if (!is.null(ci_obj)) {
+        ci_lo    = as.numeric(ci_obj[1])
+        ci_hi    = as.numeric(ci_obj[3])
+        auroc_se = (ci_hi - ci_lo) / (2 * 1.96)
+      } else {
+        ci_lo = ci_hi = auroc_se = NA_real_
+      }
+      
+      list(n_obs = n_obs, n_events = n_events, auroc = auc_val,
+           auroc_se = auroc_se, ci_lower = ci_lo, ci_upper = ci_hi)
+    }
+  }
+}, by = .(score_name, liquid_01)]
+
+auroc_liquid_24h[, `:=`(site = site_lowercase, horizon = 24L)]
+
+write_artifact(
+  df       = auroc_liquid_24h,
+  analysis = "horizon",
+  artifact = "auroc",
   site     = site_lowercase,
   strata   = "liquid",
   horizon  = 24L
