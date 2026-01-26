@@ -1,473 +1,451 @@
+# ==============================================================================
 # 02_discrimination.R
+# AUROC calculations using two complementary approaches:
+#   1. Site-level meta-analysis (proper DeLong CIs at each site, then pooled)
+#   2. Pooled weighted AUC (from aggregated counts, Hanley-McNeil CIs)
+# ==============================================================================
 
 # setup ------------------------------------------------------------------------
 
 library(pROC)
+library(WeightedROC)
+library(metafor)
 
-# helper functions -------------------------------------------------------------
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
 
-#' Calculate AUROC with DeLong CIs from aggregated count data
-#' For encounter-level data where independence assumption holds
-calculate_auroc_delong = function(df_input, analysis_name, score_col = "max_value") {
+#' Calculate weighted AUC from aggregated count data (no expansion needed)
+#' Uses WeightedROC package for memory-efficient computation
+#' @param df data.table with columns: value (score), outcome (0/1), n (count)
+#' @return list with auc, n_total, n_events
+calculate_weighted_auc = function(df) {
   
-  if (nrow(df_input) == 0) {
-    message("  Warning: No data for analysis: ", analysis_name)
-    return(data.table())
+  if (nrow(df) == 0) return(list(auc = NA_real_, n_total = 0L, n_events = 0L))
+  
+  n_total  = sum(df$n, na.rm = TRUE)
+  n_events = sum(df$n[df$outcome == 1], na.rm = TRUE)
+  
+  if (n_events == 0 || n_events == n_total) {
+    return(list(auc = NA_real_, n_total = n_total, n_events = n_events))
   }
   
-  combos = unique(df_input[, .(score_name, ca_01)])
-  auroc_results = list()
+  # WeightedROC expects: predictor scores, true labels (0/1), weights
+  # We have aggregated data, so we pass value as score, outcome as label, n as weight
+  tp_fp = tryCatch(
+    WeightedROC(df$value, df$outcome, df$n),
+    error = function(e) NULL
+  )
+  
+  if (is.null(tp_fp)) {
+    return(list(auc = NA_real_, n_total = n_total, n_events = n_events))
+  }
+  
+  auc_val = WeightedAUC(tp_fp)
+  
+  list(auc = auc_val, n_total = n_total, n_events = n_events)
+}
+
+#' Calculate Hanley-McNeil standard error for AUC
+#' Analytical approximation that doesn't require individual observations
+#' @param auc the AUC value
+#' @param n_pos number of positive cases (events)
+#' @param n_neg number of negative cases (non-events)
+#' @return standard error of AUC
+hanley_mcneil_se = function(auc, n_pos, n_neg) {
+  
+  if (is.na(auc) || n_pos <= 0 || n_neg <= 0) return(NA_real_)
+  
+  # Hanley & McNeil (1982) approximation
+  q1 = auc / (2 - auc)
+  q2 = (2 * auc^2) / (1 + auc)
+  
+  var_auc = (auc * (1 - auc) + (n_pos - 1) * (q1 - auc^2) + (n_neg - 1) * (q2 - auc^2)) / 
+            (n_pos * n_neg)
+  
+  sqrt(var_auc)
+}
+
+#' Meta-analyze site-level AUROCs using random-effects model
+#' @param auroc_dt data.table with site, auroc, auroc_se columns
+#' @return data.table with pooled estimate, CI, heterogeneity stats
+meta_analyze_aurocs = function(auroc_dt) {
+  
+  # Filter to valid estimates
+  dt = auroc_dt[!is.na(auroc) & !is.na(auroc_se) & auroc_se > 0]
+  
+  if (nrow(dt) < 2) {
+    # Can't meta-analyze with <2 studies
+    if (nrow(dt) == 1) {
+      return(data.table(
+        k_sites     = 1L,
+        auroc       = dt$auroc[1],
+        auroc_se    = dt$auroc_se[1],
+        ci_lower    = dt$auroc[1] - 1.96 * dt$auroc_se[1],
+        ci_upper    = dt$auroc[1] + 1.96 * dt$auroc_se[1],
+        tau2        = NA_real_,
+        I2          = NA_real_,
+        method      = "single_site"
+      ))
+    }
+    return(data.table(
+      k_sites = 0L, auroc = NA_real_, auroc_se = NA_real_,
+      ci_lower = NA_real_, ci_upper = NA_real_,
+      tau2 = NA_real_, I2 = NA_real_, method = "insufficient_data"
+    ))
+  }
+  
+  # Random-effects meta-analysis
+  ma = tryCatch(
+    rma(yi = dt$auroc, sei = dt$auroc_se, method = "REML"),
+    error = function(e) NULL
+  )
+  
+  if (is.null(ma)) {
+    return(data.table(
+      k_sites = nrow(dt), auroc = NA_real_, auroc_se = NA_real_,
+      ci_lower = NA_real_, ci_upper = NA_real_,
+      tau2 = NA_real_, I2 = NA_real_, method = "meta_failed"
+    ))
+  }
+  
+  data.table(
+    k_sites   = nrow(dt),
+    auroc     = as.numeric(ma$beta),
+    auroc_se  = ma$se,
+    ci_lower  = ma$ci.lb,
+    ci_upper  = ma$ci.ub,
+    tau2      = ma$tau2,
+    I2        = ma$I2,
+    method    = "random_effects_meta"
+  )
+}
+
+# ==============================================================================
+# APPROACH 1: SITE-LEVEL META-ANALYSIS
+# Uses DeLong CIs computed at each site, then pools via random-effects
+# ==============================================================================
+
+message("\n== Approach 1: Site-level meta-analysis ==")
+
+## Encounter-level AUROCs ------------------------------------------------------
+
+message("\n  -- Encounter-level AUROCs --")
+
+if (exists("auroc_enc_raw") && nrow(auroc_enc_raw) > 0) {
+  
+  # Meta-analyze by score × cancer × analysis
+  enc_meta_list = list()
+  
+  combos = unique(auroc_enc_raw[, .(score_name, ca_01, analysis)])
   
   for (i in seq_len(nrow(combos))) {
-    score  = combos$score_name[i]
-    cancer = combos$ca_01[i]
     
-    score_data = df_input[score_name == score & ca_01 == cancer]
+    sub = auroc_enc_raw[
+      score_name == combos$score_name[i] & 
+      ca_01 == combos$ca_01[i] & 
+      analysis == combos$analysis[i]
+    ]
     
-    if (nrow(score_data) == 0) next
+    ma_result = meta_analyze_aurocs(sub)
+    ma_result[, `:=`(
+      score_name = combos$score_name[i],
+      ca_01      = combos$ca_01[i],
+      analysis   = combos$analysis[i],
+      metric     = "Encounter max",
+      n_total    = sum(sub$n_obs, na.rm = TRUE),
+      n_events   = sum(sub$n_events, na.rm = TRUE)
+    )]
     
-    # Check outcome variation
-    n_pos = score_data[outcome == 1, sum(n, na.rm = TRUE)]
-    n_neg = score_data[outcome == 0, sum(n, na.rm = TRUE)]
-    total_n = n_pos + n_neg
-    
-    if (n_pos == 0 | n_neg == 0) {
-      message("  Warning: No outcome variation for ", analysis_name, " ", score, " ca_01=", cancer)
-      next
-    }
-    
-    # Expand to individual observations
-    df_expanded = score_data[rep(1:.N, n)]
-    
-    # ROC on expanded data
-    roc_obj = roc(
-      response  = df_expanded$outcome,
-      predictor = df_expanded[[score_col]],
-      quiet     = TRUE,
-      levels    = c(0, 1),
-      direction = "<"
-    )
-    
-    ci_delong = ci.auc(roc_obj, method = "delong")
-    
-    auroc_results[[length(auroc_results) + 1]] = data.table(
-      analysis   = analysis_name,
-      score_name = score,
-      ca_01      = cancer,
-      n          = total_n,
-      n_events   = n_pos,
-      auroc      = as.numeric(auc(roc_obj)),
-      ci_lower   = ci_delong[1],
-      ci_upper   = ci_delong[3]
-    )
-    
-    rm(df_expanded)
+    enc_meta_list[[i]] = ma_result
   }
   
-  gc()
-  rbindlist(auroc_results, use.names = TRUE)
+  auroc_enc_meta = rbindlist(enc_meta_list, use.names = TRUE, fill = TRUE)
+  
+  message("  Encounter-level meta-analysis: ", nrow(auroc_enc_meta), " estimates")
+  
+} else {
+  message("  WARNING: No site-level encounter AUROCs available")
+  auroc_enc_meta = data.table()
 }
 
-delong_comparison = function(df_input, analysis_name, score_col = "max_value") {
-  
-  if (nrow(df_input) == 0) {
-    return(data.table())
-  }
-  
-  scores_list = unique(df_input$score_name)
-  results = list()
-  
-  for (score in scores_list) {
-    
-    score_data = df_input[score_name == score]
-    
-    # Check both groups exist with outcome variation
-    data_c0 = score_data[ca_01 == 0]
-    data_c1 = score_data[ca_01 == 1]
-    
-    if (nrow(data_c0) == 0 | nrow(data_c1) == 0) {
-      message("  Warning: Missing cancer group for ", analysis_name, " ", score)
-      next
-    }
-    
-    n_pos_c0 = data_c0[outcome == 1, sum(n, na.rm = TRUE)]
-    n_neg_c0 = data_c0[outcome == 0, sum(n, na.rm = TRUE)]
-    n_pos_c1 = data_c1[outcome == 1, sum(n, na.rm = TRUE)]
-    n_neg_c1 = data_c1[outcome == 0, sum(n, na.rm = TRUE)]
-    
-    if (n_pos_c0 == 0 | n_neg_c0 == 0 | n_pos_c1 == 0 | n_neg_c1 == 0) {
-      message("  Warning: No outcome variation for ", analysis_name, " ", score)
-      next
-    }
-    
-    # Expand to individual observations
-    exp_c0 = data_c0[rep(1:.N, n)]
-    exp_c1 = data_c1[rep(1:.N, n)]
-    
-    roc_c0 = roc(exp_c0$outcome, exp_c0[[score_col]], quiet = TRUE, levels = c(0, 1), direction = "<")
-    roc_c1 = roc(exp_c1$outcome, exp_c1[[score_col]], quiet = TRUE, levels = c(0, 1), direction = "<")
-    
-    tst = roc.test(roc_c0, roc_c1, method = "delong", paired = FALSE)
-    
-    results[[length(results) + 1]] = data.table(
-      analysis   = analysis_name,
-      score_name = score,
-      auroc_c0   = as.numeric(auc(roc_c0)),
-      auroc_c1   = as.numeric(auc(roc_c1)),
-      diff_auc   = as.numeric(auc(roc_c1) - auc(roc_c0)),
-      p_delong   = unname(tst$p.value)
-    )
-    
-    rm(exp_c0, exp_c1)
-  }
-  
-  gc()
-  rbindlist(results, use.names = TRUE)
-}
+## 24-hour horizon AUROCs ------------------------------------------------------
 
-#' Calculate AUROC from bootstrap iterations
-#' For 24h horizon data where repeated observations violate independence
-calculate_auroc_bootstrap = function(boot_data, point_data, analysis_name, score_col = "value") {
+message("\n  -- 24-hour horizon AUROCs --")
+
+if (exists("auroc_h24_raw") && nrow(auroc_h24_raw) > 0) {
   
-  if (nrow(boot_data) == 0 | nrow(point_data) == 0) {
-    message("  Warning: No data for bootstrap analysis: ", analysis_name)
-    return(data.table())
-  }
+  h24_meta_list = list()
   
-  combos = unique(point_data[, .(score_name, ca_01)])
-  auroc_results = list()
+  combos = unique(auroc_h24_raw[, .(score_name, ca_01, analysis)])
   
   for (i in seq_len(nrow(combos))) {
-    score  = combos$score_name[i]
-    cancer = combos$ca_01[i]
     
-    # Point estimate from raw counts (for n and n_events)
-    point_sub = point_data[score_name == score & ca_01 == cancer]
-    n_total  = point_sub[, sum(n, na.rm = TRUE)]
-    n_events = point_sub[outcome == 1, sum(n, na.rm = TRUE)]
+    sub = auroc_h24_raw[
+      score_name == combos$score_name[i] & 
+      ca_01 == combos$ca_01[i] & 
+      analysis == combos$analysis[i]
+    ]
     
-    if (n_total == 0 | n_events == 0) next
+    ma_result = meta_analyze_aurocs(sub)
+    ma_result[, `:=`(
+      score_name = combos$score_name[i],
+      ca_01      = combos$ca_01[i],
+      analysis   = combos$analysis[i],
+      metric     = "24-hour horizon",
+      n_total    = sum(sub$n_obs, na.rm = TRUE),
+      n_events   = sum(sub$n_events, na.rm = TRUE)
+    )]
     
-    # Bootstrap iterations
-    boot_sub = boot_data[score_name == score & ca_01 == cancer]
-    
-    if (nrow(boot_sub) == 0) {
-      message("  Warning: No bootstrap data for ", score, " ca_01=", cancer)
-      next
-    }
-    
-    # Calculate AUROC for each bootstrap iteration
-    boot_aurocs = boot_sub[, {
-      # Expand this iteration's counts
-      if (sum(n) == 0) return(data.table(auroc = NA_real_))
-      
-      df_iter = .SD[rep(1:.N, n)]
-      
-      # Check outcome variation
-      if (length(unique(df_iter$outcome)) < 2) return(data.table(auroc = NA_real_))
-      
-      roc_obj = tryCatch(
-        roc(df_iter$outcome, df_iter[[score_col]], quiet = TRUE, levels = c(0, 1), direction = "<"),
-        error = function(e) NULL
-      )
-      
-      if (is.null(roc_obj)) return(data.table(auroc = NA_real_))
-      
-      data.table(auroc = as.numeric(auc(roc_obj)))
-    }, by = iter]
-    
-    # Remove failed iterations
-    boot_aurocs = boot_aurocs[!is.na(auroc)]
-    
-    if (nrow(boot_aurocs) < 10) {
-      message("  Warning: Too few valid bootstrap iterations for ", score, " ca_01=", cancer)
-      next
-    }
-    
-    # Point estimate (median of bootstrap) and percentile CIs
-    auroc_point = median(boot_aurocs$auroc)
-    ci_lower    = quantile(boot_aurocs$auroc, 0.025)
-    ci_upper    = quantile(boot_aurocs$auroc, 0.975)
-    
-    auroc_results[[length(auroc_results) + 1]] = data.table(
-      analysis   = analysis_name,
-      score_name = score,
-      ca_01      = cancer,
-      n          = n_total,
-      n_events   = n_events,
-      auroc      = auroc_point,
-      ci_lower   = ci_lower,
-      ci_upper   = ci_upper,
-      n_boot     = nrow(boot_aurocs)
-    )
+    h24_meta_list[[i]] = ma_result
   }
   
-  gc()
-  rbindlist(auroc_results, use.names = TRUE)
+  auroc_h24_meta = rbindlist(h24_meta_list, use.names = TRUE, fill = TRUE)
+  
+  message("  24h horizon meta-analysis: ", nrow(auroc_h24_meta), " estimates")
+  
+} else {
+  message("  WARNING: No site-level 24h AUROCs available")
+  auroc_h24_meta = data.table()
 }
 
-#' Bootstrap-based comparison of AUROCs between cancer and non-cancer
-#' Returns difference and p-value based on bootstrap distribution
-bootstrap_comparison = function(boot_data, point_data, analysis_name, score_col = "value") {
-  
-  if (nrow(boot_data) == 0) {
-    return(data.table())
-  }
-  
-  scores_list = unique(point_data$score_name)
-  results = list()
-  
-  for (score in scores_list) {
-    
-    boot_sub = boot_data[score_name == score]
-    
-    # Check both groups exist
-    if (!all(c(0, 1) %in% boot_sub$ca_01)) {
-      message("  Warning: Missing cancer group in bootstrap for ", score)
-      next
-    }
-    
-    # Calculate AUROC for each iteration × cancer group
-    iter_aurocs = boot_sub[, {
-      if (sum(n) == 0) return(data.table(auroc = NA_real_))
-      
-      df_iter = .SD[rep(1:.N, n)]
-      
-      if (length(unique(df_iter$outcome)) < 2) return(data.table(auroc = NA_real_))
-      
-      roc_obj = tryCatch(
-        roc(df_iter$outcome, df_iter[[score_col]], quiet = TRUE, levels = c(0, 1), direction = "<"),
-        error = function(e) NULL
-      )
-      
-      if (is.null(roc_obj)) return(data.table(auroc = NA_real_))
-      
-      data.table(auroc = as.numeric(auc(roc_obj)))
-    }, by = .(iter, ca_01)]
-    
-    # Pivot to get paired differences
-    iter_wide = dcast(iter_aurocs, iter ~ ca_01, value.var = "auroc")
-    setnames(iter_wide, c("0", "1"), c("auroc_c0", "auroc_c1"))
-    iter_wide = iter_wide[!is.na(auroc_c0) & !is.na(auroc_c1)]
-    
-    if (nrow(iter_wide) < 10) {
-      message("  Warning: Too few paired bootstrap iterations for ", score)
-      next
-    }
-    
-    iter_wide[, diff := auroc_c1 - auroc_c0]
-    
-    # Point estimates and CI for difference
-    auroc_c0_est = median(iter_wide$auroc_c0)
-    auroc_c1_est = median(iter_wide$auroc_c1)
-    diff_est     = median(iter_wide$diff)
-    
-    # Two-sided p-value: proportion of bootstrap diffs on opposite side of 0
-    p_boot = 2 * min(
-      mean(iter_wide$diff <= 0),
-      mean(iter_wide$diff >= 0)
-    )
-    
-    results[[length(results) + 1]] = data.table(
-      analysis   = analysis_name,
-      score_name = score,
-      auroc_c0   = auroc_c0_est,
-      auroc_c1   = auroc_c1_est,
-      diff_auc   = diff_est,
-      p_boot     = p_boot,
-      n_boot     = nrow(iter_wide)
-    )
-  }
-  
-  gc()
-  rbindlist(results, use.names = TRUE)
+## Combine site-level meta-analysis results ------------------------------------
+
+auroc_meta_all = rbindlist(list(auroc_enc_meta, auroc_h24_meta), use.names = TRUE, fill = TRUE)
+
+if (nrow(auroc_meta_all) > 0) {
+  auroc_meta_all[, approach := "site_meta"]
 }
 
-# define analysis variants -----------------------------------------------------
+# ==============================================================================
+# APPROACH 2: POOLED WEIGHTED AUC
+# Uses aggregated counts with WeightedROC, Hanley-McNeil CIs
+# ==============================================================================
+
+message("\n== Approach 2: Pooled weighted AUC ==")
+
+## Encounter-level (from maxscores) --------------------------------------------
+
+message("\n  -- Encounter-level AUROCs (weighted) --")
 
 analysis_variants = c("main", "fullcode_only", "no_ed_req", "win0_96h", "one_enc_per_pt")
 
-# ==============================================================================
-# ENCOUNTER-LEVEL AUROCs (DeLong - independence assumption holds)
-# ==============================================================================
-
-message("\n== Encounter-level AUROCs (DeLong method) ==")
-
-enc_auroc_list  = list()
-enc_delong_list = list()
+enc_weighted_list = list()
 
 for (variant in analysis_variants) {
   
-  df_subset = maxscores_ca_raw[analysis == variant]
+  df_variant = maxscores_ca_raw[analysis == variant]
   
-  n_rows = nrow(df_subset)
-  n_enc  = df_subset[, sum(n, na.rm = TRUE)]
-  message("  ", variant, ": ", format_n(n_rows), " rows, ~", format_n(n_enc), " encounters")
-  
-  if (n_rows > 0) {
-    enc_auroc_list[[variant]]  = calculate_auroc_delong(df_subset, variant, score_col = "max_value")
-    enc_delong_list[[variant]] = delong_comparison(df_subset, variant, score_col = "max_value")
+  if (nrow(df_variant) == 0) {
+    message("    ", variant, ": 0 rows, skipping")
+    next
   }
   
-  gc()
+  combos = unique(df_variant[, .(score_name, ca_01)])
+  
+  for (j in seq_len(nrow(combos))) {
+    
+    sub = df_variant[score_name == combos$score_name[j] & ca_01 == combos$ca_01[j]]
+    
+    # Rename for calculate_weighted_auc
+    sub_renamed = sub[, .(value = max_value, outcome, n)]
+    
+    result = calculate_weighted_auc(sub_renamed)
+    
+    # Hanley-McNeil SE
+    n_pos = result$n_events
+    n_neg = result$n_total - result$n_events
+    se_hm = hanley_mcneil_se(result$auc, n_pos, n_neg)
+    
+    enc_weighted_list[[length(enc_weighted_list) + 1]] = data.table(
+      score_name = combos$score_name[j],
+      ca_01      = combos$ca_01[j],
+      analysis   = variant,
+      metric     = "Encounter max",
+      auroc      = result$auc,
+      auroc_se   = se_hm,
+      ci_lower   = result$auc - 1.96 * se_hm,
+      ci_upper   = result$auc + 1.96 * se_hm,
+      n_total    = result$n_total,
+      n_events   = result$n_events,
+      method     = "weighted_hanley_mcneil"
+    )
+  }
+  
+  message("    ", variant, ": ", nrow(df_variant), " rows")
 }
 
-auroc_encounter  = rbindlist(enc_auroc_list,  use.names = TRUE, fill = TRUE)
-delong_encounter = rbindlist(enc_delong_list, use.names = TRUE, fill = TRUE)
+auroc_enc_weighted = rbindlist(enc_weighted_list, use.names = TRUE, fill = TRUE)
+message("  Encounter-level weighted: ", nrow(auroc_enc_weighted), " estimates")
 
-# Merge DeLong comparison results
-if (nrow(delong_encounter) > 0) {
-  auroc_encounter = merge(
-    auroc_encounter,
-    delong_encounter[, .(analysis, score_name, p_delong, auroc_c0, auroc_c1, diff_auc)],
-    by = c("analysis", "score_name"),
-    all.x = TRUE
-  )
-}
+## 24-hour horizon (from counts) -----------------------------------------------
 
-setorder(auroc_encounter, analysis, score_name, ca_01)
+message("\n  -- 24-hour horizon AUROCs (weighted) --")
 
-rm(enc_auroc_list, enc_delong_list)
-gc()
-
-
-# ==============================================================================
-# 24-HOUR HORIZON AUROCs
-# Primary: All observations with DeLong CIs (note: treats repeated obs as independent)
-# Sensitivity: Bootstrap with 1 obs/encounter (accounts for within-encounter correlation)
-# ==============================================================================
-
-message("\n== 24-hour horizon AUROCs ==")
-
-h24_auroc_list      = list()
-h24_comparison_list = list()
-
-# ------------------------------------------------------------------------------
-# PRIMARY ANALYSIS: All observations (DeLong CIs)
-# Note: CIs are anti-conservative due to within-encounter correlation
-# ------------------------------------------------------------------------------
-
-message("\n  -- Primary analysis (all observations, DeLong CIs) --")
-message("  Note: CIs treat repeated observations as independent")
+h24_weighted_list = list()
 
 for (variant in analysis_variants) {
   
-  df_subset = counts_h24_raw[analysis == variant]
+  df_variant = counts_h24_raw[analysis == variant]
   
-  n_rows = nrow(df_subset)
-  n_obs  = df_subset[, sum(n, na.rm = TRUE)]
-  message("  ", variant, ": ", format_n(n_rows), " rows, ~", format_n(n_obs), " observations")
-  
-  if (n_rows > 0) {
-    h24_auroc_list[[variant]]      = calculate_auroc_delong(df_subset, variant, score_col = "value")
-    h24_comparison_list[[variant]] = delong_comparison(df_subset, variant, score_col = "value")
+  if (nrow(df_variant) == 0) {
+    message("    ", variant, ": 0 rows, skipping")
+    next
   }
   
-  gc()
+  combos = unique(df_variant[, .(score_name, ca_01)])
+  
+  for (j in seq_len(nrow(combos))) {
+    
+    sub = df_variant[score_name == combos$score_name[j] & ca_01 == combos$ca_01[j]]
+    
+    result = calculate_weighted_auc(sub)
+    
+    n_pos = result$n_events
+    n_neg = result$n_total - result$n_events
+    se_hm = hanley_mcneil_se(result$auc, n_pos, n_neg)
+    
+    h24_weighted_list[[length(h24_weighted_list) + 1]] = data.table(
+      score_name = combos$score_name[j],
+      ca_01      = combos$ca_01[j],
+      analysis   = variant,
+      metric     = "24-hour horizon",
+      auroc      = result$auc,
+      auroc_se   = se_hm,
+      ci_lower   = result$auc - 1.96 * se_hm,
+      ci_upper   = result$auc + 1.96 * se_hm,
+      n_total    = result$n_total,
+      n_events   = result$n_events,
+      method     = "weighted_hanley_mcneil"
+    )
+  }
+  
+  message("    ", variant, ": ", nrow(df_variant), " rows")
 }
 
-auroc_24h_primary      = rbindlist(h24_auroc_list, use.names = TRUE, fill = TRUE)
-comparison_24h_primary = rbindlist(h24_comparison_list, use.names = TRUE, fill = TRUE)
+auroc_h24_weighted = rbindlist(h24_weighted_list, use.names = TRUE, fill = TRUE)
+message("  24h horizon weighted: ", nrow(auroc_h24_weighted), " estimates")
 
-# Merge comparison results
-if (nrow(comparison_24h_primary) > 0) {
-  auroc_24h_primary = merge(
-    auroc_24h_primary,
-    comparison_24h_primary[, .(analysis, score_name, p_delong, auroc_c0, auroc_c1, diff_auc)],
-    by = c("analysis", "score_name"),
-    all.x = TRUE
+## Combine weighted results ----------------------------------------------------
+
+auroc_weighted_all = rbindlist(list(auroc_enc_weighted, auroc_h24_weighted), use.names = TRUE, fill = TRUE)
+
+if (nrow(auroc_weighted_all) > 0) {
+  auroc_weighted_all[, approach := "pooled_weighted"]
+}
+
+# ==============================================================================
+# COMPARE APPROACHES
+# ==============================================================================
+
+message("\n== Comparing approaches ==")
+
+if (nrow(auroc_meta_all) > 0 && nrow(auroc_weighted_all) > 0) {
+  
+  # Merge for comparison
+  comparison = merge(
+    auroc_meta_all[, .(score_name, ca_01, analysis, metric, 
+                       auroc_meta = auroc, se_meta = auroc_se, ci_lo_meta = ci_lower, ci_hi_meta = ci_upper)],
+    auroc_weighted_all[, .(score_name, ca_01, analysis, metric,
+                           auroc_weighted = auroc, se_weighted = auroc_se, ci_lo_weighted = ci_lower, ci_hi_weighted = ci_upper)],
+    by = c("score_name", "ca_01", "analysis", "metric"),
+    all = TRUE
   )
-}
-
-auroc_24h_primary[, ci_note := "DeLong (anti-conservative)"]
-
-rm(h24_auroc_list, h24_comparison_list)
-gc()
-
-# ------------------------------------------------------------------------------
-# SENSITIVITY ANALYSIS: Bootstrap (1 obs/encounter, 400 iterations)
-# Accounts for within-encounter correlation
-# ------------------------------------------------------------------------------
-
-message("\n  -- Sensitivity analysis (clustered bootstrap, 1 obs/encounter) --")
-
-h24_boot_auroc_list      = list()
-h24_boot_comparison_list = list()
-
-# Main analysis with bootstrap
-boot_main  = boot_h24_raw[!grepl("se_", site)]
-point_main = counts_h24_raw[analysis == "main"]
-boot_main[, score_name := gsub("_total$", "", score_name)]
-
-if (nrow(boot_main) > 0 & nrow(point_main) > 0) {
   
-  n_iters = uniqueN(boot_main$iter)
-  message("  main: ", format_n(n_iters), " bootstrap iterations")
+  comparison[, `:=`(
+    diff_auroc = auroc_meta - auroc_weighted,
+    diff_se    = se_meta - se_weighted
+  )]
   
-  h24_boot_auroc_list[["main"]]      = calculate_auroc_bootstrap(boot_main, point_main, "main", score_col = "value")
-  h24_boot_comparison_list[["main"]] = bootstrap_comparison(boot_main, point_main, "main", score_col = "value")
+  message("\n  Comparison of main analysis (meta vs weighted):")
+  print(comparison[analysis == "main", .(metric, score_name, ca_01, 
+                                          auroc_meta = round(auroc_meta, 3),
+                                          auroc_weighted = round(auroc_weighted, 3),
+                                          diff = round(diff_auroc, 4))])
+  
+  auroc_comparison = comparison
   
 } else {
-  message("  Warning: No bootstrap data available for main analysis")
+  message("  Cannot compare - one or both approaches have no data")
+  auroc_comparison = data.table()
 }
 
-gc()
+# ==============================================================================
+# PRIMARY RESULTS (use site-level meta if available, else weighted)
+# ==============================================================================
 
-auroc_24h_bootstrap      = rbindlist(h24_boot_auroc_list, use.names = TRUE, fill = TRUE)
-comparison_24h_bootstrap = rbindlist(h24_boot_comparison_list, use.names = TRUE, fill = TRUE)
+message("\n== Assembling primary results ==")
 
-# Merge comparison results
-if (nrow(comparison_24h_bootstrap) > 0) {
-  comparison_24h_bootstrap[, p_delong := p_boot]  # Rename for consistency
-  
-  auroc_24h_bootstrap = merge(
-    auroc_24h_bootstrap,
-    comparison_24h_bootstrap[, .(analysis, score_name, p_delong, auroc_c0, auroc_c1, diff_auc)],
-    by = c("analysis", "score_name"),
-    all.x = TRUE
-  )
+# Prefer site-level meta-analysis (proper CIs), fall back to weighted
+if (nrow(auroc_meta_all) > 0) {
+  auroc_primary = copy(auroc_meta_all)
+  message("  Using site-level meta-analysis as primary")
+} else {
+  auroc_primary = copy(auroc_weighted_all)
+  message("  Using pooled weighted AUC as primary (no site-level data)")
 }
-
-auroc_24h_bootstrap[, ci_note := "Bootstrap (accounts for clustering)"]
-
-rm(h24_boot_auroc_list, h24_boot_comparison_list, boot_main, point_main)
-gc()
-
-# ------------------------------------------------------------------------------
-# Combine primary and sensitivity 24h results
-# ------------------------------------------------------------------------------
-
-# Tag analysis type
-auroc_24h_primary[, h24_method := "primary"]
-auroc_24h_bootstrap[, h24_method := "sensitivity_bootstrap"]
-
-auroc_24h = rbindlist(list(auroc_24h_primary, auroc_24h_bootstrap), use.names = TRUE, fill = TRUE)
-
-message("\n  24h primary estimates: ", nrow(auroc_24h_primary))
-message("  24h bootstrap sensitivity estimates: ", nrow(auroc_24h_bootstrap))
-
-setorder(auroc_24h, h24_method, analysis, score_name, ca_01)
-
-rm(auroc_24h_primary, auroc_24h_bootstrap, comparison_24h_primary, comparison_24h_bootstrap)
-
-# ==============================================================================
-# COMBINE RESULTS
-# ==============================================================================
-
-message("\n== Combining results ==")
-
-auroc_encounter[, metric := "Encounter max"]
-auroc_encounter[, h24_method := NA_character_]
-
-auroc_24h[, metric := "24-hour horizon"]
-
-auroc_all = rbindlist(list(auroc_encounter, auroc_24h), use.names = TRUE, fill = TRUE)
 
 # Add labels
-auroc_all[, `:=`(
+auroc_primary[, `:=`(
   ca_lab       = fifelse(ca_01 == 1L, "Cancer", "Non-cancer"),
   analysis_lab = factor(analysis, levels = names(ANALYSIS_LABS), labels = ANALYSIS_LABS),
   score_lab    = factor(score_name, levels = names(SCORE_LABS), labels = SCORE_LABS),
+  metric_lab   = factor(metric, levels = c("Encounter max", "24-hour horizon"))
+)]
+
+# ==============================================================================
+# AUROC DIFFERENCES (Cancer vs Non-cancer)
+# ==============================================================================
+
+message("\n== Computing AUROC differences ==")
+
+auroc_diff = auroc_primary[, {
+  
+  auc_ca    = auroc[ca_01 == 1]
+  auc_nonca = auroc[ca_01 == 0]
+  se_ca     = auroc_se[ca_01 == 1]
+  se_nonca  = auroc_se[ca_01 == 0]
+  
+  if (length(auc_ca) == 1 && length(auc_nonca) == 1 && 
+      !is.na(auc_ca) && !is.na(auc_nonca)) {
+    
+    diff_val = auc_ca - auc_nonca
+    
+    # SE of difference (assuming independence between groups)
+    se_diff = sqrt(se_ca^2 + se_nonca^2)
+    
+    # Z-test for difference
+    z_val = diff_val / se_diff
+    p_val = 2 * pnorm(-abs(z_val))
+    
+    list(
+      auroc_ca     = auc_ca,
+      auroc_nonca  = auc_nonca,
+      diff_auc     = diff_val,
+      se_diff      = se_diff,
+      p_value      = p_val
+    )
+  } else {
+    list(
+      auroc_ca    = NA_real_,
+      auroc_nonca = NA_real_,
+      diff_auc    = NA_real_,
+      se_diff     = NA_real_,
+      p_value     = NA_real_
+    )
+  }
+}, by = .(score_name, analysis, metric)]
+
+auroc_diff[, `:=`(
+  sig = fcase(
+    is.na(p_value), "",
+    p_value < 0.001, "***",
+    p_value < 0.01,  "**",
+    p_value < 0.05,  "*",
+    default = ""
+  ),
+  score_lab    = factor(score_name, levels = names(SCORE_LABS), labels = SCORE_LABS),
+  analysis_lab = factor(analysis, levels = names(ANALYSIS_LABS), labels = ANALYSIS_LABS),
   metric_lab   = factor(metric, levels = c("Encounter max", "24-hour horizon"))
 )]
 
@@ -477,93 +455,56 @@ auroc_all[, `:=`(
 
 message("\n== Creating summary tables ==")
 
-## main analysis results (primary 24h, not bootstrap sensitivity) --------------
+## Main analysis table ---------------------------------------------------------
 
-auroc_main = auroc_all[
-  analysis == "main" & (is.na(h24_method) | h24_method == "primary"), 
-  .(
-    metric, score_lab, ca_lab, 
-    auroc_fmt = sprintf("%.3f (%.3f-%.3f)", auroc, ci_lower, ci_upper),
-    n         = format_n(n),
-    n_events  = format_n(n_events)
-  )
-]
+auroc_main_table = auroc_primary[analysis == "main", .(
+  metric_lab, score_lab, ca_lab,
+  auroc_fmt = sprintf("%.3f (%.3f-%.3f)", auroc, ci_lower, ci_upper),
+  n         = format_n(n_total),
+  n_events  = format_n(n_events)
+)]
 
 auroc_main_wide = dcast(
-  auroc_main, 
-  metric + score_lab ~ ca_lab, 
+  auroc_main_table,
+  metric_lab + score_lab ~ ca_lab,
   value.var = "auroc_fmt"
 )
 
-## 24h bootstrap sensitivity comparison ----------------------------------------
+## Difference table ------------------------------------------------------------
 
-auroc_24h_comparison = auroc_all[
-  metric == "24-hour horizon" & analysis == "main",
-  .(h24_method, score_lab, ca_lab, auroc, ci_lower, ci_upper)
-]
-
-if (nrow(auroc_24h_comparison) > 0) {
-  auroc_24h_comparison[, auroc_fmt := sprintf("%.3f (%.3f-%.3f)", auroc, ci_lower, ci_upper)]
-  
-  auroc_24h_sens_table = dcast(
-    auroc_24h_comparison,
-    score_lab + ca_lab ~ h24_method,
-    value.var = "auroc_fmt"
-  )
-  setnames(auroc_24h_sens_table, 
-           c("primary", "sensitivity_bootstrap"),
-           c("Primary (all obs)", "Sensitivity (bootstrap)"),
-           skip_absent = TRUE)
-} else {
-  auroc_24h_sens_table = data.table()
-}
-
-## difference summary ----------------------------------------------------------
-
-auroc_diff = unique(auroc_all[
-  analysis == "main" & (is.na(h24_method) | h24_method == "primary") & !is.na(diff_auc), 
-  .(metric, score_lab, diff_auc, p_delong)
-])
-
-auroc_diff[, `:=`(
+auroc_diff_table = auroc_diff[analysis == "main", .(
+  metric_lab, score_lab,
   diff_fmt = sprintf("%.3f", diff_auc),
-  p_fmt    = fifelse(!is.na(p_delong), sprintf("%.4f", p_delong), "—"),
-  sig      = fcase(
-    is.na(p_delong), "",
-    p_delong < 0.001, "***",
-    p_delong < 0.01,  "**",
-    p_delong < 0.05,  "*",
-    default = ""
-  )
+  p_fmt    = fifelse(!is.na(p_value) & p_value < 0.001, "<0.001", 
+                     fifelse(!is.na(p_value), sprintf("%.3f", p_value), "—")),
+  sig
 )]
-
-## sensitivity analysis comparison (encounter-level) ---------------------------
-
-sens_comparison = auroc_all[ca_01 == 1 & metric == "Encounter max", .(
-  analysis_lab, score_lab, auroc
-)]
-
-if (nrow(sens_comparison) > 0) {
-  sens_comparison = dcast(sens_comparison, score_lab ~ analysis_lab, value.var = "auroc")
-}
 
 # ==============================================================================
 # EXPORTS
 # ==============================================================================
 
 message("\n== Discrimination analysis complete ==")
-message("  Encounter-level estimates: ", nrow(auroc_encounter))
-message("  24-hour horizon estimates: ", nrow(auroc_24h))
-message("    - Primary (all obs): ", nrow(auroc_24h[h24_method == "primary"]))
-message("    - Sensitivity (bootstrap): ", nrow(auroc_24h[h24_method == "sensitivity_bootstrap"]))
-message("  Total AUROC estimates: ", nrow(auroc_all))
 
-# Objects for figures and other scripts
-auroc_results_final    = auroc_all
-auroc_main_table       = auroc_main_wide
-auroc_diff_table       = auroc_diff
-sens_comparison_table  = sens_comparison
-auroc_24h_sens_table   = auroc_24h_sens_table  # New: primary vs bootstrap comparison
+if (nrow(auroc_meta_all) > 0) {
+  message("  Site-level meta-analysis estimates: ", nrow(auroc_meta_all))
+}
+if (nrow(auroc_weighted_all) > 0) {
+  message("  Pooled weighted estimates: ", nrow(auroc_weighted_all))
+}
+message("  Primary results: ", nrow(auroc_primary))
 
-rm(auroc_encounter, auroc_24h, delong_encounter)
+# Export objects for downstream scripts
+auroc_results_final    = auroc_primary
+auroc_meta_final       = auroc_meta_all
+auroc_weighted_final   = auroc_weighted_all
+auroc_comparison_final = auroc_comparison
+auroc_diff_final       = auroc_diff
+auroc_main_table_final = auroc_main_wide
+auroc_diff_table_final = auroc_diff_table
+
+# Also export site-level data for forest plots
+if (exists("auroc_enc_raw")) auroc_site_enc = auroc_enc_raw
+if (exists("auroc_h24_raw")) auroc_site_h24 = auroc_h24_raw
+
 gc()
