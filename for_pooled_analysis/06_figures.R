@@ -50,7 +50,7 @@ fig1_enc = fig1_data[metric == "Encounter max"]
 fig1_24h = fig1_data[metric == "24-hour horizon"]
 
 fig1 = ggplot(fig1_data, aes(x = auroc, y = score_lab, color = ca_lab)) +
-
+  
   geom_vline(xintercept = 0.5, linetype = "dashed", alpha = 0.4, color = "gray50") +
   geom_pointrange(
     aes(xmin = ci_lower, xmax = ci_upper),
@@ -149,7 +149,7 @@ fig3_data = forest_data_final[!is.na(or_int)]
 fig3_data[, site_label := fifelse(is_pooled, "Pooled", toupper(site))]
 
 fig3 = ggplot(fig3_data, aes(x = or_int, y = reorder(site_label, is_pooled), 
-                              color = is_pooled, size = is_pooled)) +
+                             color = is_pooled, size = is_pooled)) +
   geom_vline(xintercept = 1, linetype = "solid", alpha = 0.3) +
   geom_vline(xintercept = c(0.98, 1.02), linetype = "dashed", alpha = 0.4, color = "#E74C3C") +
   geom_pointrange(aes(xmin = or_int_lower, xmax = or_int_upper)) +
@@ -225,7 +225,7 @@ message("\n== Creating Figure 5: Slope Comparison ==")
 if (exists("slope_preds_final") && nrow(slope_preds_final) > 0) {
   
   fig5 = ggplot(slope_preds_final, aes(x = score_value, y = predicted_prob,
-                                        color = cancer_status, linetype = cancer_status)) +
+                                       color = cancer_status, linetype = cancer_status)) +
     geom_line(linewidth = 1.2) +
     scale_y_continuous(labels = percent_format(), limits = c(0, NA)) +
     scale_color_manual(
@@ -367,7 +367,7 @@ if (exists("liquid_aurocs_final") && nrow(liquid_aurocs_final) > 0) {
 message("\n== Creating Figure S4: AUROC Difference Heatmap ==")
 
 figS4_data = unique(auroc_results_final[!is.na(diff_auc), 
-                                         .(metric_lab, analysis_lab, score_lab, diff_auc, p_delong)])
+                                        .(metric_lab, analysis_lab, score_lab, diff_auc, p_delong)])
 
 figS4_data[, sig := fcase(
   is.na(p_delong), "",
@@ -487,7 +487,7 @@ message("  Figure S6 saved")
 message("\n== Creating Combined Main Figure ==")
 
 combined_main = (fig1 + labs(title = NULL)) / 
-                (fig2 + labs(title = NULL, subtitle = NULL)) + 
+  (fig2 + labs(title = NULL, subtitle = NULL)) + 
   plot_annotation(tag_levels = "A") +
   plot_layout(heights = c(1, 0.9))
 
