@@ -199,13 +199,15 @@ cont_wide = rbindlist(list(age_wide, vw_wide))
 ### collapse categories --------------------------------------------------------
 
 cat_data[var == "initial_code_status" & category %in% c("presume full", "presumed full", "presume_full"), 
-         category := "full"]
+         category := "Full"]
 cat_data[var == "initial_code_status" & category %in% c("dnar/dni", "dnr/dni", "and"), 
-         category := "dnr/dni"]
+         category := "DNR/DNI"]
 cat_data[var == "initial_code_status" & category %in% c("other", "special/partial", "dnar"), 
-         category := "other"]
+         category := "Other"]
+cat_data[var == "initial_code_status" & tolower(category) == "full",
+         category := "Full"]
 cat_data[var == "race_category" & category %in% c("other", "unknown", "two or more races"), 
-         category := "other/unknown"]
+         category := "Other/Unknown"]
 
 ### aggregate ------------------------------------------------------------------
 
@@ -462,7 +464,10 @@ los_header = table3[var == "los" &  is.na(category)]
 los_cats   = table3[var == "los" & !is.na(category)]
 los_cats   = los_cats[match(c("< 2 days", "2-4 days", "4-7 days", "7-14 days", "> 14 days"), category)]
 
-# Ensure LOS header row exists with proper display
+# Get LOS p-value from chi_results
+los_pval = chi_results[var == "los", p_value]
+
+# Ensure LOS header row exists with proper display and p-value
 if (nrow(los_header) == 0) {
   # Create header row if missing
   los_header = data.table(
@@ -470,11 +475,16 @@ if (nrow(los_header) == 0) {
     category = NA_character_,
     label    = "Length of stay, n (%)",
     display  = "Length of stay, n (%)",
-    sort_key = 7L
+    sort_key = 7L,
+    p_value  = los_pval
   )
 } else {
   # Make sure display is set correctly for header
   los_header[, display := "Length of stay, n (%)"]
+  # Ensure p_value is set
+  if (is.na(los_header$p_value[1]) || length(los_pval) > 0) {
+    los_header[, p_value := los_pval]
+  }
 }
 
 other_rows = table3[var != "los"]
