@@ -1,4 +1,3 @@
-
 # 01_tables.R
 # Table 1 (flow), Table 2 (characteristics), Table 3 (outcomes)
 
@@ -6,6 +5,14 @@
 
 library(flextable)
 library(officer)
+
+# output directories -----------------------------------------------------------
+
+fig_dir = here::here("output", "figures")
+tbl_dir = here::here("output", "tables")
+
+if (!dir.exists(fig_dir)) dir.create(fig_dir, recursive = TRUE)
+if (!dir.exists(tbl_dir)) dir.create(tbl_dir, recursive = TRUE)
 
 # TABLE 1: FLOW DIAGRAM (Figure S1) --------------------------------------------
 
@@ -110,7 +117,7 @@ diagram_code = paste0(diagram_code, "}")
 flow_diagram = grViz(diagram_code)
 
 # Save flow diagram
-export_svg(flow_diagram) |> charToRaw() |> rsvg::rsvg_pdf(here("_figures", paste0("figure_s01_flow_", today, ".pdf")))
+export_svg(flow_diagram) |> charToRaw() |> rsvg::rsvg_pdf(file.path(fig_dir, paste0("figS1_flow_", today, ".pdf")))
 
 # TABLE 2: CHARACTERISTICS -----------------------------------------------------
 
@@ -331,7 +338,7 @@ setnames(table2, "display", "Variable")
 message("  Table 2 created with ", nrow(table2), " rows")
 
 ft2 = flextable(table2) |> autofit()
-save_as_docx(ft2, path = here("_tables", paste0("table2_characteristics_", today, ".docx")))
+save_as_docx(ft2, path = file.path(tbl_dir, paste0("table2_characteristics_", today, ".docx")))
 
 # TABLE 3: OUTCOMES ------------------------------------------------------------
 
@@ -471,7 +478,7 @@ setnames(table3, "display", "Variable")
 message("  Table 3 created with ", nrow(table3), " rows")
 
 ft3 = flextable(table3) |> autofit()
-save_as_docx(ft3, path = here("_tables", paste0("table3_outcomes_", today, ".docx")))
+save_as_docx(ft3, path = file.path(tbl_dir, paste0("table3_outcomes_", today, ".docx")))
 
 # exports ----------------------------------------------------------------------
 
