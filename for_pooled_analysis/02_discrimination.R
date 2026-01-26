@@ -1,4 +1,3 @@
-
 # 02_discrimination.R
 
 # setup ------------------------------------------------------------------------
@@ -332,118 +331,124 @@ rm(enc_auroc_list, enc_delong_list)
 gc()
 
 
-# 24-HOUR HORIZON AUROCs (Bootstrap - repeated obs violate independence) -------
+# ==============================================================================
+# 24-HOUR HORIZON AUROCs
+# Primary: All observations with DeLong CIs (note: treats repeated obs as independent)
+# Sensitivity: Bootstrap with 1 obs/encounter (accounts for within-encounter correlation)
+# ==============================================================================
 
-message("\n== 24-hour horizon AUROCs (Bootstrap method) ==")
+message("\n== 24-hour horizon AUROCs ==")
 
-# Main analysis only uses bootstrap for 24h (sensitivity analyses don't have bootstrap data)
-# For main: use bootstrap CIs
-# For sensitivity: use point estimates only (or skip if no bootstrap)
-
-h24_auroc_list  = list()
+h24_auroc_list      = list()
 h24_comparison_list = list()
 
-# Main analysis with bootstrap
-message("  main: processing bootstrap data...")
+# ------------------------------------------------------------------------------
+# PRIMARY ANALYSIS: All observations (DeLong CIs)
+# Note: CIs are anti-conservative due to within-encounter correlation
+# ------------------------------------------------------------------------------
 
-boot_main  = boot_h24_raw[!grepl("se_", site)]  
-point_main = counts_h24_raw[analysis == "main"]
-boot_main[, score_name := gsub("_total$", "", score_name)]
+message("\n  -- Primary analysis (all observations, DeLong CIs) --")
+message("  Note: CIs treat repeated observations as independent")
 
-if (nrow(boot_main) > 0 & nrow(point_main) > 0) {
-  h24_auroc_list[["main"]] = calculate_auroc_bootstrap(boot_main, point_main, "main", score_col = "value")
-  h24_comparison_list[["main"]] = bootstrap_comparison(boot_main, point_main, "main", score_col = "value")
-} else {
-  message("  Warning: Missing bootstrap data for main analysis")
-}
-
-gc()
-
-# Sensitivity analyses - point estimates only (no valid CIs due to repeated obs)
-# These are supplementary; we note the limitation
-sens_variants = c("fullcode_only", "no_ed_req", "win0_96h", "one_enc_per_pt")
-
-for (variant in sens_variants) {
+for (variant in analysis_variants) {
   
   df_subset = counts_h24_raw[analysis == variant]
   
   n_rows = nrow(df_subset)
-  message("  ", variant, ": ", format_n(n_rows), " rows (point estimate only)")
+  n_obs  = df_subset[, sum(n, na.rm = TRUE)]
+  message("  ", variant, ": ", format_n(n_rows), " rows, ~", format_n(n_obs), " observations")
   
   if (n_rows > 0) {
-    # Calculate point estimate AUROC without valid CIs
-    # We expand but note these CIs are anti-conservative
-    combos = unique(df_subset[, .(score_name, ca_01)])
-    
-    variant_results = list()
-    
-    for (i in seq_len(nrow(combos))) {
-      score  = combos$score_name[i]
-      cancer = combos$ca_01[i]
-      
-      score_data = df_subset[score_name == score & ca_01 == cancer]
-      
-      n_pos = score_data[outcome == 1, sum(n, na.rm = TRUE)]
-      n_neg = score_data[outcome == 0, sum(n, na.rm = TRUE)]
-      total_n = n_pos + n_neg
-      
-      if (n_pos == 0 | n_neg == 0) next
-      
-      # Sample to avoid memory issues - take ~50k obs max
-      if (total_n > 50000) {
-        sample_frac = 50000 / total_n
-        score_data = copy(score_data)
-        score_data[, n_sampled := pmax(1L, as.integer(round(n * sample_frac)))]
-        df_expanded = score_data[rep(1:.N, n_sampled)]
-      } else {
-        df_expanded = score_data[rep(1:.N, n)]
-      }
-      
-      roc_obj = roc(df_expanded$outcome, df_expanded$value, quiet = TRUE, levels = c(0, 1), direction = "<")
-      
-      variant_results[[length(variant_results) + 1]] = data.table(
-        analysis   = variant,
-        score_name = score,
-        ca_01      = cancer,
-        n          = total_n,
-        n_events   = n_pos,
-        auroc      = as.numeric(auc(roc_obj)),
-        ci_lower   = NA_real_,  # Not valid for repeated obs
-        ci_upper   = NA_real_
-      )
-      
-      rm(df_expanded)
-    }
-    
-    h24_auroc_list[[variant]] = rbindlist(variant_results, use.names = TRUE)
+    h24_auroc_list[[variant]]      = calculate_auroc_delong(df_subset, variant, score_col = "value")
+    h24_comparison_list[[variant]] = delong_comparison(df_subset, variant, score_col = "value")
   }
   
   gc()
 }
 
-auroc_24h = rbindlist(h24_auroc_list, use.names = TRUE, fill = TRUE)
-comparison_24h = rbindlist(h24_comparison_list, use.names = TRUE, fill = TRUE)
+auroc_24h_primary      = rbindlist(h24_auroc_list, use.names = TRUE, fill = TRUE)
+comparison_24h_primary = rbindlist(h24_comparison_list, use.names = TRUE, fill = TRUE)
 
-# Merge comparison results (bootstrap p-values for main)
-if (nrow(comparison_24h) > 0) {
-  # Rename p_boot to match encounter-level naming
-  comparison_24h[, p_delong := p_boot]
-  
-  auroc_24h = merge(
-    auroc_24h,
-    comparison_24h[, .(analysis, score_name, p_delong, auroc_c0, auroc_c1, diff_auc)],
+# Merge comparison results
+if (nrow(comparison_24h_primary) > 0) {
+  auroc_24h_primary = merge(
+    auroc_24h_primary,
+    comparison_24h_primary[, .(analysis, score_name, p_delong, auroc_c0, auroc_c1, diff_auc)],
     by = c("analysis", "score_name"),
     all.x = TRUE
   )
 }
 
-message("h24_auroc_list length: ", length(h24_auroc_list))
-message("h24_auroc_list names: ", paste(names(h24_auroc_list), collapse = ", "))
+auroc_24h_primary[, ci_note := "DeLong (anti-conservative)"]
 
-setorder(auroc_24h, analysis, score_name, ca_01)
-
-rm(h24_auroc_list, h24_comparison_list, boot_main, point_main)
+rm(h24_auroc_list, h24_comparison_list)
 gc()
+
+# ------------------------------------------------------------------------------
+# SENSITIVITY ANALYSIS: Bootstrap (1 obs/encounter, 400 iterations)
+# Accounts for within-encounter correlation
+# ------------------------------------------------------------------------------
+
+message("\n  -- Sensitivity analysis (clustered bootstrap, 1 obs/encounter) --")
+
+h24_boot_auroc_list      = list()
+h24_boot_comparison_list = list()
+
+# Main analysis with bootstrap
+boot_main  = boot_h24_raw[!grepl("se_", site)]
+point_main = counts_h24_raw[analysis == "main"]
+boot_main[, score_name := gsub("_total$", "", score_name)]
+
+if (nrow(boot_main) > 0 & nrow(point_main) > 0) {
+  
+  n_iters = uniqueN(boot_main$iter)
+  message("  main: ", format_n(n_iters), " bootstrap iterations")
+  
+  h24_boot_auroc_list[["main"]]      = calculate_auroc_bootstrap(boot_main, point_main, "main", score_col = "value")
+  h24_boot_comparison_list[["main"]] = bootstrap_comparison(boot_main, point_main, "main", score_col = "value")
+  
+} else {
+  message("  Warning: No bootstrap data available for main analysis")
+}
+
+gc()
+
+auroc_24h_bootstrap      = rbindlist(h24_boot_auroc_list, use.names = TRUE, fill = TRUE)
+comparison_24h_bootstrap = rbindlist(h24_boot_comparison_list, use.names = TRUE, fill = TRUE)
+
+# Merge comparison results
+if (nrow(comparison_24h_bootstrap) > 0) {
+  comparison_24h_bootstrap[, p_delong := p_boot]  # Rename for consistency
+  
+  auroc_24h_bootstrap = merge(
+    auroc_24h_bootstrap,
+    comparison_24h_bootstrap[, .(analysis, score_name, p_delong, auroc_c0, auroc_c1, diff_auc)],
+    by = c("analysis", "score_name"),
+    all.x = TRUE
+  )
+}
+
+auroc_24h_bootstrap[, ci_note := "Bootstrap (accounts for clustering)"]
+
+rm(h24_boot_auroc_list, h24_boot_comparison_list, boot_main, point_main)
+gc()
+
+# ------------------------------------------------------------------------------
+# Combine primary and sensitivity 24h results
+# ------------------------------------------------------------------------------
+
+# Tag analysis type
+auroc_24h_primary[, h24_method := "primary"]
+auroc_24h_bootstrap[, h24_method := "sensitivity_bootstrap"]
+
+auroc_24h = rbindlist(list(auroc_24h_primary, auroc_24h_bootstrap), use.names = TRUE, fill = TRUE)
+
+message("\n  24h primary estimates: ", nrow(auroc_24h_primary))
+message("  24h bootstrap sensitivity estimates: ", nrow(auroc_24h_bootstrap))
+
+setorder(auroc_24h, h24_method, analysis, score_name, ca_01)
+
+rm(auroc_24h_primary, auroc_24h_bootstrap, comparison_24h_primary, comparison_24h_bootstrap)
 
 # ==============================================================================
 # COMBINE RESULTS
@@ -452,6 +457,8 @@ gc()
 message("\n== Combining results ==")
 
 auroc_encounter[, metric := "Encounter max"]
+auroc_encounter[, h24_method := NA_character_]
+
 auroc_24h[, metric := "24-hour horizon"]
 
 auroc_all = rbindlist(list(auroc_encounter, auroc_24h), use.names = TRUE, fill = TRUE)
@@ -461,7 +468,7 @@ auroc_all[, `:=`(
   ca_lab       = fifelse(ca_01 == 1L, "Cancer", "Non-cancer"),
   analysis_lab = factor(analysis, levels = names(ANALYSIS_LABS), labels = ANALYSIS_LABS),
   score_lab    = factor(score_name, levels = names(SCORE_LABS), labels = SCORE_LABS),
-  metric_lab   = factor(metric, levels = c("24-hour horizon", "Encounter max"))
+  metric_lab   = factor(metric, levels = c("Encounter max", "24-hour horizon"))
 )]
 
 # ==============================================================================
@@ -470,14 +477,17 @@ auroc_all[, `:=`(
 
 message("\n== Creating summary tables ==")
 
-## main analysis results -------------------------------------------------------
+## main analysis results (primary 24h, not bootstrap sensitivity) --------------
 
-auroc_main = auroc_all[analysis == "main", .(
-  metric, score_lab, ca_lab, 
-  auroc_fmt = sprintf("%.3f (%.3f-%.3f)", auroc, ci_lower, ci_upper),
-  n         = format_n(n),
-  n_events  = format_n(n_events)
-)]
+auroc_main = auroc_all[
+  analysis == "main" & (is.na(h24_method) | h24_method == "primary"), 
+  .(
+    metric, score_lab, ca_lab, 
+    auroc_fmt = sprintf("%.3f (%.3f-%.3f)", auroc, ci_lower, ci_upper),
+    n         = format_n(n),
+    n_events  = format_n(n_events)
+  )
+]
 
 auroc_main_wide = dcast(
   auroc_main, 
@@ -485,11 +495,35 @@ auroc_main_wide = dcast(
   value.var = "auroc_fmt"
 )
 
+## 24h bootstrap sensitivity comparison ----------------------------------------
+
+auroc_24h_comparison = auroc_all[
+  metric == "24-hour horizon" & analysis == "main",
+  .(h24_method, score_lab, ca_lab, auroc, ci_lower, ci_upper)
+]
+
+if (nrow(auroc_24h_comparison) > 0) {
+  auroc_24h_comparison[, auroc_fmt := sprintf("%.3f (%.3f-%.3f)", auroc, ci_lower, ci_upper)]
+  
+  auroc_24h_sens_table = dcast(
+    auroc_24h_comparison,
+    score_lab + ca_lab ~ h24_method,
+    value.var = "auroc_fmt"
+  )
+  setnames(auroc_24h_sens_table, 
+           c("primary", "sensitivity_bootstrap"),
+           c("Primary (all obs)", "Sensitivity (bootstrap)"),
+           skip_absent = TRUE)
+} else {
+  auroc_24h_sens_table = data.table()
+}
+
 ## difference summary ----------------------------------------------------------
 
-auroc_diff = unique(auroc_all[analysis == "main" & !is.na(diff_auc), .(
-  metric, score_lab, diff_auc, p_delong
-)])
+auroc_diff = unique(auroc_all[
+  analysis == "main" & (is.na(h24_method) | h24_method == "primary") & !is.na(diff_auc), 
+  .(metric, score_lab, diff_auc, p_delong)
+])
 
 auroc_diff[, `:=`(
   diff_fmt = sprintf("%.3f", diff_auc),
@@ -503,7 +537,7 @@ auroc_diff[, `:=`(
   )
 )]
 
-## sensitivity analysis comparison ---------------------------------------------
+## sensitivity analysis comparison (encounter-level) ---------------------------
 
 sens_comparison = auroc_all[ca_01 == 1 & metric == "Encounter max", .(
   analysis_lab, score_lab, auroc
@@ -520,13 +554,16 @@ if (nrow(sens_comparison) > 0) {
 message("\n== Discrimination analysis complete ==")
 message("  Encounter-level estimates: ", nrow(auroc_encounter))
 message("  24-hour horizon estimates: ", nrow(auroc_24h))
+message("    - Primary (all obs): ", nrow(auroc_24h[h24_method == "primary"]))
+message("    - Sensitivity (bootstrap): ", nrow(auroc_24h[h24_method == "sensitivity_bootstrap"]))
 message("  Total AUROC estimates: ", nrow(auroc_all))
 
 # Objects for figures and other scripts
-auroc_results_final   = auroc_all
-auroc_main_table      = auroc_main_wide
-auroc_diff_table      = auroc_diff
-sens_comparison_table = sens_comparison
+auroc_results_final    = auroc_all
+auroc_main_table       = auroc_main_wide
+auroc_diff_table       = auroc_diff
+sens_comparison_table  = sens_comparison
+auroc_24h_sens_table   = auroc_24h_sens_table  # New: primary vs bootstrap comparison
 
-rm(auroc_encounter, auroc_24h, delong_encounter, comparison_24h)
+rm(auroc_encounter, auroc_24h, delong_encounter)
 gc()
