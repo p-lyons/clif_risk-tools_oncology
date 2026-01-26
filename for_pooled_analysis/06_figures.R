@@ -25,16 +25,12 @@ pal_cancer = c("Non-cancer" = "#0072B2", "Cancer" = "#D55E00")
 pal_type   = c("Solid" = "#009E73", "Hematologic" = "#CC79A7")
 pal_sites  = c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
 
-theme_paper = theme_minimal(base_size = 11) +
+theme_paper = theme_bw(base_size = 11) +
   theme(
     panel.grid.minor   = element_blank(),
-    panel.grid.major.y = element_line(color = "gray90"),
-    panel.grid.major.x = element_blank(),
     strip.background   = element_rect(fill = "gray95", color = NA),
     strip.text         = element_text(face = "bold", size = 10),
     legend.position    = "bottom",
-    plot.title         = element_text(face = "bold", size = 12),
-    plot.subtitle      = element_text(color = "gray40", size = 9),
     axis.title         = element_text(size = 10),
     axis.text          = element_text(size = 9)
   )
@@ -66,8 +62,8 @@ fig1 = ggplot(fig1_data, aes(x = max_value, weight = n, fill = ca_lab)) +
   labs(
     x        = "Maximum Score During Ward Stay",
     y        = "Density",
-    title    = "Distribution of Maximum Early Warning Scores",
-    subtitle = "Per encounter, stratified by cancer status"
+    
+    
   ) +
   theme_paper +
   theme(legend.position = "top")
@@ -121,8 +117,8 @@ if (nrow(fig2_data) > 0) {
     labs(
       x        = "AUROC (95% CI)",
       y        = NULL,
-      title    = "Discrimination of Early Warning Scores",
-      subtitle = "Random-effects meta-analysis of site-level AUROCs"
+      
+      
     ) +
     theme_paper +
     theme(
@@ -178,8 +174,8 @@ if (nrow(fig3_data) > 0) {
     labs(
       x        = "AUROC (95% CI)",
       y        = NULL,
-      title    = "Sensitivity Analyses",
-      subtitle = "Encounter-level discrimination across analysis variants"
+      
+      
     ) +
     theme_paper +
     theme(
@@ -229,8 +225,8 @@ if (exists("forest_data_final") && nrow(forest_data_final) > 0) {
     labs(
       x        = "Interaction OR per Score Point (95% CI)",
       y        = NULL,
-      title    = "Score × Cancer Interaction",
-      subtitle = "Random-effects meta-analysis; dashed lines = equivalence bounds (0.98-1.02)"
+      
+      
     ) +
     theme_paper +
     theme(panel.grid.major.y = element_blank())
@@ -295,8 +291,8 @@ if (exists("fig5_data") && nrow(fig5_data) > 0 && "score_lab" %in% names(fig5_da
     labs(
       x        = "Days from Ward Admission",
       y        = "Cumulative Proportion Ever Positive",
-      title    = "Time to Score Positivity",
-      subtitle = "Stratified by cancer status and outcome"
+      
+      
     ) +
     theme_paper +
     theme(legend.position = "bottom")
@@ -343,8 +339,8 @@ if (exists("auroc_site_enc") && nrow(auroc_site_enc) > 0) {
     labs(
       x        = "Site",
       y        = "AUROC (95% CI)",
-      title    = "Site-Level Discrimination",
-      subtitle = "Encounter-level AUROCs with DeLong confidence intervals"
+      
+      
     ) +
     theme_paper +
     theme(
@@ -509,8 +505,8 @@ if (exists("liquid_aurocs_final") && nrow(liquid_aurocs_final) > 0) {
     labs(
       x        = "AUROC (95% CI)",
       y        = NULL,
-      title    = "Hematologic vs Solid Malignancies",
-      subtitle = "Encounter-level discrimination"
+      
+      
     ) +
     theme_paper +
     theme(
@@ -549,8 +545,8 @@ if (exists("slope_preds_final") && nrow(slope_preds_final) > 0) {
     labs(
       x        = "Score Value",
       y        = "Predicted Probability of Deterioration",
-      title    = "Score-Outcome Relationship",
-      subtitle = "Predicted probability from pooled logistic regression"
+      
+      
     ) +
     theme_paper +
     theme(legend.position = "bottom")
@@ -588,8 +584,8 @@ if (exists("auroc_comparison_final") && nrow(auroc_comparison_final) > 0) {
     labs(
       x        = "Pooled Weighted AUC (Hanley-McNeil CI)",
       y        = "Meta-analyzed Site AUROCs (Random Effects)",
-      title    = "Comparison of AUROC Estimation Methods",
-      subtitle = "Main analysis; diagonal = perfect agreement"
+      
+      
     ) +
     theme_paper +
     theme(legend.position = "top")
