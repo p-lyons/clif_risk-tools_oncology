@@ -1,4 +1,3 @@
-
 # 00_load.R
 # Centralized data loading and helper functions for pooled analyses
 
@@ -13,30 +12,30 @@ library(here)
 # configuration ----------------------------------------------------------------
 
 ALLOWED_SITES = c(
-
-"emory",
-"hopkins",
-"ohsu",
-"rush",
-"ucmc",
-"umn",
-"upenn"
+  
+  "emory",
+  "hopkins",
+  "ohsu",
+  "rush",
+  "ucmc",
+  "umn",
+  "upenn"
 )
 
 SCORE_LABS = c(
-sirs    = "SIRS",
-qsofa   = "qSOFA",
-mews    = "MEWS",
-news    = "NEWS",
-mews_sf = "MEWS-SF"
+  sirs    = "SIRS",
+  qsofa   = "qSOFA",
+  mews    = "MEWS",
+  news    = "NEWS",
+  mews_sf = "MEWS-SF"
 )
 
 ANALYSIS_LABS = c(
-main           = "Main",
-fullcode_only  = "Full-code only",
-no_ed_req      = "No ED requirement",
-win0_96h       = "0-96 hour window",
-one_enc_per_pt = "One encounter per patient"
+  main           = "Main",
+  fullcode_only  = "Full-code only",
+  no_ed_req      = "No ED requirement",
+  win0_96h       = "0-96 hour window",
+  one_enc_per_pt = "One encounter per patient"
 )
 
 today = format(Sys.Date(), "%y%m%d")
@@ -290,6 +289,19 @@ upset_comp_raw    = read_grouped_files(here(), "upset-components")
 coef_data_raw = read_grouped_files(here(), "coefficients", exclude_pattern = "proj_output")
 score_sds_raw = read_grouped_files(here(), "score_sds",    exclude_pattern = "proj_output")
 
+## site-level AUROCs -----------------------------------------------------------
+
+message("\n  Loading site-level AUROCs...")
+
+# encounter-level AUROCs (from main/ and sensitivity/ folders)
+auroc_enc_raw    = read_grouped_files(here(), "auroc-ca", exclude_pattern = "h12|h24|liquid")
+auroc_liquid_enc = read_grouped_files(here(), "auroc-liquid", exclude_pattern = "h12|h24")
+
+# horizon AUROCs (from horizon/ and sensitivity/ folders)
+auroc_h24_raw    = read_grouped_files(here(), "auroc-ca-h24")
+auroc_h12_raw    = read_grouped_files(here(), "auroc-ca-h12")
+auroc_liquid_h24 = read_grouped_files(here(), "auroc-liquid-h24")
+
 ## diagnostics -----------------------------------------------------------------
 
 diag_overall_raw   = read_grouped_files(here(), "overall")
@@ -319,10 +331,33 @@ if (nrow(counts_h12_raw) > 0) {
   counts_h12_raw[, score_name := str_remove(score_name, "_total")]
 }
 
+## add analysis variant to site-level AUROCs -----------------------------------
+
+if (nrow(auroc_enc_raw) > 0) {
+  auroc_enc_raw[, analysis := parse_analysis_variant(site)]
+  auroc_enc_raw[, score_name := str_remove(score_name, "_total")]
+  # clean site name (remove variant suffix for actual site)
+  auroc_enc_raw[, site_clean := str_remove(site, "_se_.*$")]
+}
+
+if (nrow(auroc_h24_raw) > 0) {
+  auroc_h24_raw[, analysis := parse_analysis_variant(site)]
+  auroc_h24_raw[, score_name := str_remove(score_name, "_total")]
+  auroc_h24_raw[, site_clean := str_remove(site, "_se_.*$")]
+}
+
+if (nrow(auroc_h12_raw) > 0) {
+  auroc_h12_raw[, analysis := parse_analysis_variant(site)]
+  auroc_h12_raw[, score_name := str_remove(score_name, "_total")]
+  auroc_h12_raw[, site_clean := str_remove(site, "_se_.*$")]
+}
+
 # summary ----------------------------------------------------------------------
 
 message("\n== Data loading complete ==")
 message("  Sites: ", paste(ALLOWED_SITES, collapse = ", "))
 message("  Maxscores rows: ", format_n(nrow(maxscores_ca_raw)))
 message("  24h counts rows: ", format_n(nrow(counts_h24_raw)))
+message("  Site-level AUROCs (encounter): ", format_n(nrow(auroc_enc_raw)))
+message("  Site-level AUROCs (24h): ", format_n(nrow(auroc_h24_raw)))
 message("  Table02 cat rows: ", format_n(nrow(cat_data_raw)))
