@@ -7,9 +7,9 @@
 
 # setup ------------------------------------------------------------------------
 
-library(pROC)
 library(WeightedROC)
 library(metafor)
+library(pROC)
 
 # ==============================================================================
 # HELPER FUNCTIONS
@@ -61,7 +61,7 @@ hanley_mcneil_se = function(auc, n_pos, n_neg) {
   q2 = (2 * auc^2) / (1 + auc)
   
   var_auc = (auc * (1 - auc) + (n_pos - 1) * (q1 - auc^2) + (n_neg - 1) * (q2 - auc^2)) / 
-            (n_pos * n_neg)
+    (n_pos * n_neg)
   
   sqrt(var_auc)
 }
@@ -143,8 +143,8 @@ if (exists("auroc_enc_raw") && nrow(auroc_enc_raw) > 0) {
     
     sub = auroc_enc_raw[
       score_name == combos$score_name[i] & 
-      ca_01 == combos$ca_01[i] & 
-      analysis == combos$analysis[i]
+        ca_01 == combos$ca_01[i] & 
+        analysis == combos$analysis[i]
     ]
     
     ma_result = meta_analyze_aurocs(sub)
@@ -183,8 +183,8 @@ if (exists("auroc_h24_raw") && nrow(auroc_h24_raw) > 0) {
     
     sub = auroc_h24_raw[
       score_name == combos$score_name[i] & 
-      ca_01 == combos$ca_01[i] & 
-      analysis == combos$analysis[i]
+        ca_01 == combos$ca_01[i] & 
+        analysis == combos$analysis[i]
     ]
     
     ma_result = meta_analyze_aurocs(sub)
@@ -359,9 +359,9 @@ if (nrow(auroc_meta_all) > 0 && nrow(auroc_weighted_all) > 0) {
   
   message("\n  Comparison of main analysis (meta vs weighted):")
   print(comparison[analysis == "main", .(metric, score_name, ca_01, 
-                                          auroc_meta = round(auroc_meta, 3),
-                                          auroc_weighted = round(auroc_weighted, 3),
-                                          diff = round(diff_auroc, 4))])
+                                         auroc_meta = round(auroc_meta, 3),
+                                         auroc_weighted = round(auroc_weighted, 3),
+                                         diff = round(diff_auroc, 4))])
   
   auroc_comparison = comparison
   
@@ -493,6 +493,27 @@ if (nrow(auroc_weighted_all) > 0) {
   message("  Pooled weighted estimates: ", nrow(auroc_weighted_all))
 }
 message("  Primary results: ", nrow(auroc_primary))
+
+# Add proper encounter Ns from VARIANT_N (not n_total which may be observations)
+# This ensures figures show correct encounter counts
+if (exists("VARIANT_N") && exists("COHORT_N")) {
+  
+  message("\n== Adding canonical encounter Ns ==")
+  
+  # For main analysis, use COHORT_N by cancer status
+  auroc_primary[analysis == "main" & ca_01 == 0, n_encounters := COHORT_N["0"]]
+  auroc_primary[analysis == "main" & ca_01 == 1, n_encounters := COHORT_N["1"]]
+  
+
+  # For sensitivity analyses, lookup from VARIANT_N
+  for (v in names(VARIANT_N)) {
+    if (v != "main") {
+      auroc_primary[analysis == v, n_encounters := VARIANT_N[v]]
+    }
+  }
+  
+  message("  Added n_encounters column to auroc_primary")
+}
 
 # Export objects for downstream scripts
 auroc_results_final    = auroc_primary
