@@ -100,7 +100,6 @@ calc_auroc_from_counts = function(data) {
   )
 }
 
-
 # ==============================================================================
 # FIGURE 1: Risk by Score Value
 # ==============================================================================
@@ -198,10 +197,9 @@ fig1 = (fig1_sirs | fig1_qsofa | fig1_mews) /
 fig1
 
 ggsave(
-  here("output", "figures", "fig1_risk_by_score.pdf"),
+  here("output", "figures", "figure_01_risk_by_score.pdf"),
   fig1, width = 10, height = 6
 )
-
 
 # ==============================================================================
 # FIGURE 2: AUROC Comparison (Main Analysis)
@@ -237,10 +235,9 @@ fig2 = ggplot(fig2_data, aes(x = score_label, y = auroc, fill = cohort_label)) +
 fig2
 
 ggsave(
-  here("output", "figures", "fig2_auroc_main.pdf"),
+  here("output", "figures", "figure_02_auroc_main.pdf"),
   fig2, width = 7, height = 5
 )
-
 
 # ==============================================================================
 # FIGURE 3: Cumulative Incidence of Positivity
@@ -278,10 +275,9 @@ fig3 = ggplot(fig3_data, aes(x = time_days, y = cum_inc, color = cohort_label)) 
 fig3
 
 ggsave(
-  here("output", "figures", "fig3_cuminc.pdf"),
+  here("output", "figures", "figure_03_cuminc.pdf"),
   fig3, width = 10, height = 4
 )
-
 
 # ==============================================================================
 # FIGURE 4: Threshold-Performance Plots (SIRS and NEWS)
@@ -431,10 +427,9 @@ fig4 = fig4_legend / (fig4_sirs | fig4_news) +
 fig4
 
 ggsave(
-  here("output", "figures", "fig4_threshold_performance.pdf"),
+  here("output", "figures", "figure_04_threshold_performance.pdf"),
   fig4, width = 8, height = 9
 )
-
 
 # ==============================================================================
 # SUPP FIGURE 2: Score Distribution Histograms (Mirrored)
@@ -468,10 +463,9 @@ sf2 = ggplot(sf2_data, aes(x = n_mirror, y = factor(max_value), fill = cohort_la
 sf2
 
 ggsave(
-  here("output", "figures", "sf2_score_histograms.pdf"),
+  here("output", "figures", "figure_s02_score_histograms.pdf"),
   sf2, width = 4, height = 11
 )
-
 
 # ==============================================================================
 # SUPP FIGURE 3: AUROC Comparison (24h Analysis)
@@ -511,11 +505,11 @@ sf3 = ggplot(sf3_aurocs, aes(x = score_label, y = auroc, fill = cohort_label)) +
   geom_errorbar(
     aes(ymin = ci_lower, ymax = ci_upper),
     width = 0.2, linewidth = 0.5, color = "black",
-    position = position_dodge(width = 0.6)
+    position = position_dodge(width = 0.4)
   ) +
   geom_point(
     shape = 21, color = "black", size = 4, stroke = 0.7,
-    position = position_dodge(width = 0.6)
+    position = position_dodge(width = 0.4)
   ) +
   scale_fill_manual(values = pal_cancer, name = "Cohort") +
   scale_y_continuous(limits = c(0.62, 0.72), breaks = seq(0.62, 0.72, 0.02)) +
@@ -526,10 +520,9 @@ sf3 = ggplot(sf3_aurocs, aes(x = score_label, y = auroc, fill = cohort_label)) +
 sf3
 
 ggsave(
-  here("output", "figures", "sf3_auroc_24h.pdf"),
+  here("output", "figures", "figure_s03_auroc_24h.pdf"),
   sf3, width = 7, height = 5
 )
-
 
 # ==============================================================================
 # SUPP FIGURE 4: Site-level AUROC Caterpillar
@@ -627,7 +620,7 @@ sf4 = ggplot(sf4_all, aes(x = site_label, y = auroc, color = cohort_label)) +
 sf4
 
 ggsave(
-  here("output", "figures", "sf4_auroc_by_site.pdf"),
+  here("output", "figures", "figure_s04_auroc_by_site.pdf"),
   sf4, width = 12, height = 6
 )
 
@@ -678,7 +671,7 @@ sf5 = sf5_legend / (sf5_qsofa | sf5_mews | sf5_mewssf) +
 sf5
 
 ggsave(
-  here("output", "figures", "sf5_threshold_performance_other.pdf"),
+  here("output", "figures", "figure_s05_threshold_performance_other.pdf"),
   sf5, width = 11, height = 9
 )
 
@@ -733,7 +726,7 @@ Stronger in cancer →"
 sf6
 
 ggsave(
-  here("output", "figures", "sf6_interaction_forest.pdf"),
+  here("output", "figures", "figure_s06_interaction_forest.pdf"),
   sf6, width = 12, height = 6
 )
 
@@ -792,7 +785,7 @@ sf7 = ggplot(sf7_wide, aes(x = analysis_label, y = diff, ymin = diff_lower, ymax
 sf7
 
 ggsave(
-  here("output", "figures", "sf7_sensitivity_auroc_diff.pdf"),
+  here("output", "figures", "figure_s07_sensitivity_auroc_diff.pdf"),
   sf7, width = 12, height = 5
 )
 
@@ -853,7 +846,7 @@ sf8 = ggplot(sf8_data, aes(x = score_label, y = auroc, fill = cancer_type)) +
 sf8
 
 ggsave(
-  here("output", "figures", "sf8_heme_solid_auroc.pdf"),
+  here("output", "figures", "figure_s08_heme_solid_auroc.pdf"),
   sf8, width = 8, height = 5
 )
 
