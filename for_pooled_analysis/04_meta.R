@@ -16,6 +16,14 @@ message("\n== Loading meta-analysis inputs ==")
 coef_data = coef_data_raw
 score_sds = score_sds_raw
 
+SCORE_LABS = c(
+  "sirs"    = "SIRS",
+  "qsofa"   = "QSOFA",
+  "mews"    = "MEWS",
+  "mews_sf" = "MEWS-SF",
+  "news"    = "NEWS"
+)
+
 ## check convergence -----------------------------------------------------------
 
 if (any(!coef_data$converged)) {
