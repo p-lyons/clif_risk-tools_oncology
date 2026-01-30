@@ -214,6 +214,12 @@ time_pos_table = first_pos_summary[outcome == 1, .(
 
 message("\n== Threshold analysis complete ==")
 
+# Note: COHORT_N, VARIANT_N, and SITE_N are available from 00_load.R
+# These should be used for figure labels rather than calculating from data
+message("  Using COHORT_N for figure labels: ", 
+        format_n(COHORT_N["0"]), " non-cancer, ",
+        format_n(COHORT_N["1"]), " cancer")
+
 # Objects for figures
 sesp_final         = sesp
 sesp_table_final   = sesp_table
