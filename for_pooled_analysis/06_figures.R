@@ -3,9 +3,10 @@
 # Publication-quality figures for pooled EWS analyses
 # ==============================================================================
 
-# setup ------------------------------------------------------------------------
 
-## additional libraries --------------------------------------------------------
+# ==============================================================================
+# SETUP
+# ==============================================================================
 
 library(patchwork)
 library(ggplot2)
@@ -25,20 +26,20 @@ pal_cancer = c("Non-Cancer" = "#4575b4", "Cancer" = "#d73027")
 theme_ews = function(base_size = 11) {
   theme_bw(base_size = base_size) %+replace%
     theme(
-      panel.grid.minor   = element_blank(),
-      strip.text         = element_text(face = "bold", size = 10),
-      strip.background   = element_rect(fill = "gray85", color = "black"),
-      legend.position    = "none"
+      panel.grid.minor = element_blank(),
+      strip.text       = element_text(face = "bold", size = 10),
+      strip.background = element_rect(fill = "gray85", color = "black"),
+      legend.position  = "none"
     )
 }
 
-## score labels (reused across figures) ----------------------------------------
+## score labels ----------------------------------------------------------------
 
 score_levels = c("sirs", "qsofa", "mews", "mews_sf", "news")
 score_labels = c("SIRS", "QSOFA", "MEWS", "MEWS-SF", "NEWS")
 names(score_labels) = score_levels
 
-## helpers: format factor vars -------------------------------------------------
+## helper functions ------------------------------------------------------------
 
 format_score = function(x) {
   x = tolower(x)
@@ -52,8 +53,6 @@ format_cohort = function(ca_01) {
     levels = c("Non-Cancer", "Cancer")
   )
 }
-
-## helper: calculate AUROC from count data -------------------------------------
 
 calc_auroc_from_counts = function(data) {
   
@@ -73,22 +72,19 @@ calc_auroc_from_counts = function(data) {
   tied       = 0
   
   for (i in seq_len(nrow(events))) {
-    ev_score = events$value[i]
-    ev_n     = as.numeric(events$n[i])
-    
+    ev_score   = events$value[i]
+    ev_n       = as.numeric(events$n[i])
     lower_idx  = which(non_events$value < ev_score)
     concordant = concordant + ev_n * safe_fsum(non_events$n[lower_idx])
-    
-    tied_idx = which(non_events$value == ev_score)
-    tied     = tied + ev_n * safe_fsum(non_events$n[tied_idx])
+    tied_idx   = which(non_events$value == ev_score)
+    tied       = tied + ev_n * safe_fsum(non_events$n[tied_idx])
   }
   
   auroc = (concordant + 0.5 * tied) / (n_events * n_non_events)
-  
-  q1 = auroc / (2 - auroc)
-  q2 = 2 * auroc^2 / (1 + auroc)
-  se = sqrt((auroc * (1 - auroc) + (n_events - 1) * (q1 - auroc^2) + 
-               (n_non_events - 1) * (q2 - auroc^2)) / (n_events * n_non_events))
+  q1    = auroc / (2 - auroc)
+  q2    = 2 * auroc^2 / (1 + auroc)
+  se    = sqrt((auroc * (1 - auroc) + (n_events - 1) * (q1 - auroc^2) + 
+                  (n_non_events - 1) * (q2 - auroc^2)) / (n_events * n_non_events))
   
   tidytable(
     auroc    = auroc,
@@ -100,6 +96,7 @@ calc_auroc_from_counts = function(data) {
   )
 }
 
+
 # ==============================================================================
 # FIGURE 1: Risk by Score Value
 # ==============================================================================
@@ -110,10 +107,7 @@ fig1_data = maxscores_ca_raw |>
   fsubset(tolower(analysis) == "main") |>
   fmutate(n_events = n * outcome) |>
   fgroup_by(score_name, ca_01, max_value) |>
-  fsummarise(
-    n_at_score = fsum(n),
-    n_outcomes = fsum(n_events)
-  ) |>
+  fsummarise(n_at_score = fsum(n), n_outcomes = fsum(n_events)) |>
   fungroup() |>
   fmutate(
     prob         = n_outcomes / n_at_score,
@@ -139,15 +133,8 @@ fig1_panel = function(data, score, show_y = TRUE, x_breaks = NULL) {
     theme(panel.grid.major.x = element_blank()) +
     labs(x = NULL)
   
-  if (!is.null(x_breaks)) {
-    p = p + scale_x_continuous(breaks = x_breaks)
-  }
-  
-  if (show_y) {
-    p = p + labs(y = "Deterioration Risk (%)")
-  } else {
-    p = p + labs(y = NULL)
-  }
+  if (!is.null(x_breaks)) p = p + scale_x_continuous(breaks = x_breaks)
+  if (show_y) p = p + labs(y = "Deterioration Risk (%)") else p = p + labs(y = NULL)
   
   p
 }
@@ -160,7 +147,7 @@ fig1_mews   = fig1_panel(fig1_data, "MEWS",    show_y = FALSE, x_breaks = seq(0,
 fig1_mewssf = fig1_panel(fig1_data, "MEWS-SF", show_y = TRUE,  x_breaks = seq(0, 10, 2))
 fig1_news   = fig1_panel(fig1_data, "NEWS",    show_y = FALSE, x_breaks = seq(0, 10, 2))
 
-## legend panel ----------------------------------------------------------------
+## legend ----------------------------------------------------------------------
 
 fig1_legend_data = tidytable(
   cohort_label = factor(c("Non-Cancer", "Cancer"), levels = c("Non-Cancer", "Cancer")),
@@ -185,7 +172,7 @@ fig1_legend = ggplot(fig1_legend_data, aes(x = x, y = y, color = cohort_label, s
     legend.spacing.y       = unit(0.8, "cm")
   )
 
-## assemble --------------------------------------------------------------------
+## assemble and save -----------------------------------------------------------
 
 fig1 = (fig1_sirs | fig1_qsofa | fig1_mews) /
   (fig1_mewssf | fig1_news | fig1_legend) +
@@ -196,10 +183,8 @@ fig1 = (fig1_sirs | fig1_qsofa | fig1_mews) /
 
 fig1
 
-ggsave(
-  here("output", "figures", "figure_01_risk_by_score.pdf"),
-  fig1, width = 10, height = 6
-)
+ggsave(here("output", "figures", "figure_01_risk_by_score.pdf"), fig1, width = 10, height = 6)
+
 
 # ==============================================================================
 # FIGURE 2: AUROC Comparison (Main Analysis)
@@ -214,7 +199,7 @@ fig2_data = auroc_results_final |>
     cohort_label = format_cohort(ca_01)
   )
 
-## plot ------------------------------------------------------------------------
+## plot and save ---------------------------------------------------------------
 
 fig2 = ggplot(fig2_data, aes(x = score_label, y = auroc, fill = cohort_label)) +
   geom_errorbar(
@@ -234,10 +219,8 @@ fig2 = ggplot(fig2_data, aes(x = score_label, y = auroc, fill = cohort_label)) +
 
 fig2
 
-ggsave(
-  here("output", "figures", "figure_02_auroc_main.pdf"),
-  fig2, width = 7, height = 5
-)
+ggsave(here("output", "figures", "figure_02_auroc_main.pdf"), fig2, width = 7, height = 5)
+
 
 # ==============================================================================
 # FIGURE 3: Cumulative Incidence of Positivity
@@ -248,10 +231,7 @@ ggsave(
 fig3_data = cuminc_raw |>
   fsubset(analysis == "main" & o_primary_01 == 1) |>
   fgroup_by(score, ca_01, time_bin_start) |>
-  fsummarise(
-    n_at_risk    = fsum(n_at_risk),
-    n_became_pos = fsum(n_became_pos)
-  ) |>
+  fsummarise(n_at_risk = fsum(n_at_risk), n_became_pos = fsum(n_became_pos)) |>
   fungroup() |>
   fmutate(
     cum_inc      = n_became_pos / n_at_risk,
@@ -260,7 +240,7 @@ fig3_data = cuminc_raw |>
     time_days    = time_bin_start / 24
   )
 
-## plot ------------------------------------------------------------------------
+## plot and save ---------------------------------------------------------------
 
 fig3 = ggplot(fig3_data, aes(x = time_days, y = cum_inc, color = cohort_label)) +
   geom_step(linewidth = 0.7) +
@@ -274,10 +254,8 @@ fig3 = ggplot(fig3_data, aes(x = time_days, y = cum_inc, color = cohort_label)) 
 
 fig3
 
-ggsave(
-  here("output", "figures", "figure_03_cuminc.pdf"),
-  fig3, width = 10, height = 4
-)
+ggsave(here("output", "figures", "figure_03_cuminc.pdf"), fig3, width = 10, height = 4)
+
 
 # ==============================================================================
 # FIGURE 4: Threshold-Performance Plots (SIRS and NEWS)
@@ -295,14 +273,9 @@ calc_threshold_metrics = function(data, score, cohort) {
   
   d = fsubset(data, score_name == score & ca_01 == cohort)
   
-  totals = d |>
-    fgroup_by(outcome) |>
-    fsummarise(n = fsum(n)) |>
-    fungroup()
-  
+  totals    = d |> fgroup_by(outcome) |> fsummarise(n = fsum(n)) |> fungroup()
   total_pos = totals$n[totals$outcome == 1]
   total_neg = totals$n[totals$outcome == 0]
-  
   if (length(total_pos) == 0) total_pos = 0
   if (length(total_neg) == 0) total_neg = 0
   
@@ -318,20 +291,16 @@ calc_threshold_metrics = function(data, score, cohort) {
   results = lapply(thresholds, function(thresh) {
     above = fsubset(d, max_value >= thresh)
     below = fsubset(d, max_value < thresh)
-    
     tp = safe_sum(above$n[above$outcome == 1])
     fp = safe_sum(above$n[above$outcome == 0])
     fn = safe_sum(below$n[below$outcome == 1])
     tn = safe_sum(below$n[below$outcome == 0])
-    
-    sens = ifelse(tp + fn > 0, tp / (tp + fn), NA)
-    spec = ifelse(tn + fp > 0, tn / (tn + fp), NA)
-    ppv  = ifelse(tp + fp > 0, tp / (tp + fp), NA)
-    npv  = ifelse(tn + fn > 0, tn / (tn + fn), NA)
-    
     tidytable(
       score_name = score, ca_01 = cohort, threshold = thresh,
-      sens = sens, spec = spec, ppv = ppv, npv = npv
+      sens = ifelse(tp + fn > 0, tp / (tp + fn), NA),
+      spec = ifelse(tn + fp > 0, tn / (tn + fp), NA),
+      ppv  = ifelse(tp + fp > 0, tp / (tp + fp), NA),
+      npv  = ifelse(tn + fn > 0, tn / (tn + fn), NA)
     )
   })
   
@@ -344,10 +313,9 @@ fig4_combos = expand.grid(
   stringsAsFactors = FALSE
 )
 
-fig4_metrics = map2(
-  fig4_combos$score, fig4_combos$cohort,
-  ~calc_threshold_metrics(fig4_prep, .x, .y)
-) |> bind_rows()
+fig4_metrics = map2(fig4_combos$score, fig4_combos$cohort,
+                    ~calc_threshold_metrics(fig4_prep, .x, .y)) |> 
+  bind_rows()
 
 fig4_data = fig4_metrics |>
   pivot_longer(cols = c(sens, spec, ppv, npv), names_to = "metric", values_to = "value") |>
@@ -355,11 +323,9 @@ fig4_data = fig4_metrics |>
     value        = fifelse(metric == "npv" & is.na(value) & threshold == 0, 1, value),
     score_label  = format_score(score_name),
     cohort_label = format_cohort(ca_01),
-    metric_label = factor(
-      metric,
-      levels = c("sens", "spec", "ppv", "npv"),
-      labels = c("Sensitivity", "Specificity", "PPV", "NPV")
-    )
+    metric_label = factor(metric,
+                          levels = c("sens", "spec", "ppv", "npv"),
+                          labels = c("Sensitivity", "Specificity", "PPV", "NPV"))
   )
 
 fig4_data_main = fsubset(fig4_data, score_label %in% c("SIRS", "NEWS"))
@@ -376,16 +342,11 @@ fig4_panel = function(data, score, show_y = TRUE) {
     facet_wrap(~metric_label, ncol = 1) +
     scale_color_manual(values = pal_cancer, name = "Cohort") +
     scale_y_continuous(labels = label_percent(), limits = c(0, 1)) +
-    labs(x = NULL) +
+    labs(x = NULL, title = score) +
     theme_ews() +
     theme(plot.title = element_text(hjust = 0, face = "bold", size = 12))
   
-  if (show_y) {
-    p = p + labs(y = NULL, title = score)
-  } else {
-    p = p + labs(y = NULL, title = score) +
-      theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
-  }
+  if (!show_y) p = p + theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())
   
   p
 }
@@ -398,10 +359,8 @@ fig4_news = fig4_panel(fig4_data_main, "NEWS", show_y = FALSE)
 ## legend ----------------------------------------------------------------------
 
 fig4_legend = ggplot(
-  tidytable(
-    cohort_label = factor(c("Non-Cancer", "Cancer"), levels = c("Non-Cancer", "Cancer")),
-    x = c(1, 2), y = c(1, 1)
-  ), 
+  tidytable(cohort_label = factor(c("Non-Cancer", "Cancer"), levels = c("Non-Cancer", "Cancer")),
+            x = c(1, 2), y = c(1, 1)), 
   aes(x = x, y = y, color = cohort_label)
 ) +
   geom_point(size = 3) +
@@ -409,13 +368,9 @@ fig4_legend = ggplot(
   xlim(10, 20) + ylim(10, 20) +
   guides(color = guide_legend(override.aes = list(size = 3))) +
   theme_void() +
-  theme(
-    legend.position        = "inside",
-    legend.position.inside = c(0.5, 0.5),
-    legend.direction       = "horizontal"
-  )
+  theme(legend.position = "inside", legend.position.inside = c(0.5, 0.5), legend.direction = "horizontal")
 
-## assemble --------------------------------------------------------------------
+## assemble and save -----------------------------------------------------------
 
 fig4 = fig4_legend / (fig4_sirs | fig4_news) +
   plot_layout(heights = c(0.05, 1)) +
@@ -426,10 +381,8 @@ fig4 = fig4_legend / (fig4_sirs | fig4_news) +
 
 fig4
 
-ggsave(
-  here("output", "figures", "figure_04_threshold_performance.pdf"),
-  fig4, width = 8, height = 9
-)
+ggsave(here("output", "figures", "figure_04_threshold_performance.pdf"), fig4, width = 8, height = 9)
+
 
 # ==============================================================================
 # SUPP FIGURE 2: Score Distribution Histograms (Mirrored)
@@ -448,7 +401,7 @@ sf2_data = maxscores_ca_raw |>
   ) |>
   fsubset(max_value <= 11)
 
-## plot ------------------------------------------------------------------------
+## plot and save ---------------------------------------------------------------
 
 sf2 = ggplot(sf2_data, aes(x = n_mirror, y = factor(max_value), fill = cohort_label)) +
   geom_bar(stat = "identity", width = 0.8) +
@@ -462,10 +415,8 @@ sf2 = ggplot(sf2_data, aes(x = n_mirror, y = factor(max_value), fill = cohort_la
 
 sf2
 
-ggsave(
-  here("output", "figures", "figure_s02_score_histograms.pdf"),
-  sf2, width = 4, height = 11
-)
+ggsave(here("output", "figures", "figure_s02_score_histograms.pdf"), sf2, width = 4, height = 11)
+
 
 # ==============================================================================
 # SUPP FIGURE 3: AUROC Comparison (24h Analysis)
@@ -479,27 +430,19 @@ sf3_pooled = counts_h24_raw |>
   fsummarise(n = fsum(n)) |>
   fungroup()
 
-sf3_combos = sf3_pooled |>
-  fselect(score_name, ca_01) |>
-  funique()
+sf3_combos = sf3_pooled |> fselect(score_name, ca_01) |> funique()
 
-sf3_aurocs = map2(
-  sf3_combos$score_name, sf3_combos$ca_01,
-  function(sc, ca) {
-    d = fsubset(sf3_pooled, score_name == sc & ca_01 == ca)
-    result = calc_auroc_from_counts(d)
-    result$score_name = sc
-    result$ca_01 = ca
-    result
-  }
-) |>
+sf3_aurocs = map2(sf3_combos$score_name, sf3_combos$ca_01, function(sc, ca) {
+  d = fsubset(sf3_pooled, score_name == sc & ca_01 == ca)
+  result = calc_auroc_from_counts(d)
+  result$score_name = sc
+  result$ca_01 = ca
+  result
+}) |>
   bind_rows() |>
-  fmutate(
-    score_label  = format_score(score_name),
-    cohort_label = format_cohort(ca_01)
-  )
+  fmutate(score_label = format_score(score_name), cohort_label = format_cohort(ca_01))
 
-## plot ------------------------------------------------------------------------
+## plot and save ---------------------------------------------------------------
 
 sf3 = ggplot(sf3_aurocs, aes(x = score_label, y = auroc, fill = cohort_label)) +
   geom_errorbar(
@@ -519,10 +462,8 @@ sf3 = ggplot(sf3_aurocs, aes(x = score_label, y = auroc, fill = cohort_label)) +
 
 sf3
 
-ggsave(
-  here("output", "figures", "figure_s03_auroc_24h.pdf"),
-  sf3, width = 7, height = 5
-)
+ggsave(here("output", "figures", "figure_s03_auroc_24h.pdf"), sf3, width = 7, height = 5)
+
 
 # ==============================================================================
 # SUPP FIGURE 4: Site-level AUROC Caterpillar
@@ -537,49 +478,33 @@ sf4_prep = maxscores_ca_raw |>
   fsummarise(n = fsum(n)) |>
   fungroup()
 
-sf4_combos = sf4_prep |>
-  fselect(site, score_name, ca_01) |>
-  funique()
+sf4_combos = sf4_prep |> fselect(site, score_name, ca_01) |> funique()
 
-sf4_aurocs = pmap(
-  list(sf4_combos$site, sf4_combos$score_name, sf4_combos$ca_01),
-  function(st, sc, ca) {
-    d = fsubset(sf4_prep, site == st & score_name == sc & ca_01 == ca)
-    result = calc_auroc_from_counts(d)
-    result$site = st
-    result$score_name = sc
-    result$ca_01 = ca
-    result
-  }
-) |> bind_rows()
+sf4_aurocs = pmap(list(sf4_combos$site, sf4_combos$score_name, sf4_combos$ca_01),
+                  function(st, sc, ca) {
+                    d = fsubset(sf4_prep, site == st & score_name == sc & ca_01 == ca)
+                    result = calc_auroc_from_counts(d)
+                    result$site = st
+                    result$score_name = sc
+                    result$ca_01 = ca
+                    result
+                  }) |> 
+  bind_rows()
 
-site_order = sf4_aurocs |>
-  fsubset(score_name == "news" & ca_01 == 0) |>
-  arrange(auroc) |>
-  pull(site)
-
+site_order  = sf4_aurocs |> fsubset(score_name == "news" & ca_01 == 0) |> arrange(auroc) |> pull(site)
 site_labels = setNames(LETTERS[seq_along(site_order)], site_order)
 
-sf4_pooled_prep = sf4_prep |>
-  fgroup_by(score_name, ca_01, value, outcome) |>
-  fsummarise(n = fsum(n)) |>
-  fungroup()
+sf4_pooled_prep   = sf4_prep |> fgroup_by(score_name, ca_01, value, outcome) |> fsummarise(n = fsum(n)) |> fungroup()
+sf4_pooled_combos = sf4_pooled_prep |> fselect(score_name, ca_01) |> funique()
 
-sf4_pooled_combos = sf4_pooled_prep |>
-  fselect(score_name, ca_01) |>
-  funique()
-
-sf4_pooled = map2(
-  sf4_pooled_combos$score_name, sf4_pooled_combos$ca_01,
-  function(sc, ca) {
-    d = fsubset(sf4_pooled_prep, score_name == sc & ca_01 == ca)
-    result = calc_auroc_from_counts(d)
-    result$site = "pooled"
-    result$score_name = sc
-    result$ca_01 = ca
-    result
-  }
-) |> bind_rows()
+sf4_pooled = map2(sf4_pooled_combos$score_name, sf4_pooled_combos$ca_01, function(sc, ca) {
+  d = fsubset(sf4_pooled_prep, score_name == sc & ca_01 == ca)
+  result = calc_auroc_from_counts(d)
+  result$site = "pooled"
+  result$score_name = sc
+  result$ca_01 = ca
+  result
+}) |> bind_rows()
 
 sf4_all = bind_rows(sf4_aurocs, sf4_pooled) |>
   fmutate(
@@ -590,7 +515,7 @@ sf4_all = bind_rows(sf4_aurocs, sf4_pooled) |>
     is_pooled    = site == "pooled"
   )
 
-## plot ------------------------------------------------------------------------
+## plot and save ---------------------------------------------------------------
 
 sf4 = ggplot(sf4_all, aes(x = site_label, y = auroc, color = cohort_label)) +
   geom_hline(
@@ -603,11 +528,7 @@ sf4 = ggplot(sf4_all, aes(x = site_label, y = auroc, color = cohort_label)) +
     width = 0.3, linewidth = 0.5,
     position = position_dodge(width = 0.6)
   ) +
-  geom_point(
-    aes(shape = is_pooled),
-    size = 2.5,
-    position = position_dodge(width = 0.6)
-  ) +
+  geom_point(aes(shape = is_pooled), size = 2.5, position = position_dodge(width = 0.6)) +
   facet_wrap(~score_label, nrow = 1) +
   scale_color_manual(values = pal_cancer, name = "Cohort") +
   scale_shape_manual(values = c("FALSE" = 16, "TRUE" = 18), guide = "none") +
@@ -619,10 +540,7 @@ sf4 = ggplot(sf4_all, aes(x = site_label, y = auroc, color = cohort_label)) +
 
 sf4
 
-ggsave(
-  here("output", "figures", "figure_s04_auroc_by_site.pdf"),
-  sf4, width = 12, height = 6
-)
+ggsave(here("output", "figures", "figure_s04_auroc_by_site.pdf"), sf4, width = 12, height = 6)
 
 
 # ==============================================================================
@@ -642,10 +560,8 @@ sf5_mewssf = fig4_panel(sf5_data, "MEWS-SF", show_y = FALSE)
 ## legend ----------------------------------------------------------------------
 
 sf5_legend = ggplot(
-  tidytable(
-    cohort_label = factor(c("Non-Cancer", "Cancer"), levels = c("Non-Cancer", "Cancer")),
-    x = c(1, 2), y = c(1, 1)
-  ), 
+  tidytable(cohort_label = factor(c("Non-Cancer", "Cancer"), levels = c("Non-Cancer", "Cancer")),
+            x = c(1, 2), y = c(1, 1)), 
   aes(x = x, y = y, color = cohort_label)
 ) +
   geom_point(size = 3) +
@@ -653,13 +569,9 @@ sf5_legend = ggplot(
   xlim(10, 20) + ylim(10, 20) +
   guides(color = guide_legend(override.aes = list(size = 3))) +
   theme_void() +
-  theme(
-    legend.position        = "inside",
-    legend.position.inside = c(0.5, 0.5),
-    legend.direction       = "horizontal"
-  )
+  theme(legend.position = "inside", legend.position.inside = c(0.5, 0.5), legend.direction = "horizontal")
 
-## assemble --------------------------------------------------------------------
+## assemble and save -----------------------------------------------------------
 
 sf5 = sf5_legend / (sf5_qsofa | sf5_mews | sf5_mewssf) +
   plot_layout(heights = c(0.05, 1)) +
@@ -670,10 +582,7 @@ sf5 = sf5_legend / (sf5_qsofa | sf5_mews | sf5_mewssf) +
 
 sf5
 
-ggsave(
-  here("output", "figures", "figure_s05_threshold_performance_other.pdf"),
-  sf5, width = 11, height = 9
-)
+ggsave(here("output", "figures", "figure_s05_threshold_performance_other.pdf"), sf5, width = 11, height = 9)
 
 
 # ==============================================================================
@@ -682,7 +591,7 @@ ggsave(
 
 ## data prep -------------------------------------------------------------------
 
-site_order_sf6 = sort(unique(forest_data_final$site[forest_data_final$site != "Pooled"]))
+site_order_sf6  = sort(unique(forest_data_final$site[forest_data_final$site != "Pooled"]))
 site_labels_sf6 = setNames(LETTERS[seq_along(site_order_sf6)], site_order_sf6)
 
 sf6_data = forest_data_final |>
@@ -694,7 +603,7 @@ sf6_data = forest_data_final |>
     abs_log_or  = abs(log(or_int))
   )
 
-## plot ------------------------------------------------------------------------
+## plot and save ---------------------------------------------------------------
 
 sf6 = ggplot(sf6_data, aes(x = site_label, y = or_int, ymin = or_int_lower, ymax = or_int_upper)) +
   geom_hline(yintercept = 1, linetype = "dashed", color = "gray50") +
@@ -705,7 +614,7 @@ sf6 = ggplot(sf6_data, aes(x = site_label, y = or_int, ymin = or_int_lower, ymax
   scale_size_manual(values = c("FALSE" = 3, "TRUE" = 5), guide = "none") +
   scale_fill_viridis_c(option = "magma", begin = 0.2, end = 0.9, guide = "none") +
   scale_y_continuous(
-    trans = "log",
+    trans  = "log",
     breaks = c(0.8, 0.9, 1.0, 1.1, 1.2),
     labels = function(x) sprintf("%.1f", x),
     limits = c(0.75, 1.25)
@@ -725,10 +634,7 @@ Stronger in cancer →"
 
 sf6
 
-ggsave(
-  here("output", "figures", "figure_s06_interaction_forest.pdf"),
-  sf6, width = 12, height = 6
-)
+ggsave(here("output", "figures", "figure_s06_interaction_forest.pdf"), sf6, width = 12, height = 6)
 
 
 # ==============================================================================
@@ -740,11 +646,7 @@ ggsave(
 sf7_wide = auroc_results_final |>
   fsubset(metric == "Encounter max") |>
   fselect(score_name, ca_01, analysis, auroc, auroc_se) |>
-  pivot_wider(
-    names_from = ca_01,
-    values_from = c(auroc, auroc_se),
-    names_sep = "_"
-  ) |>
+  pivot_wider(names_from = ca_01, values_from = c(auroc, auroc_se), names_sep = "_") |>
   fmutate(
     diff       = auroc_1 - auroc_0,
     diff_se    = sqrt(auroc_se_1^2 + auroc_se_0^2),
@@ -758,7 +660,7 @@ sf7_wide = auroc_results_final |>
     )
   )
 
-## plot ------------------------------------------------------------------------
+## plot and save ---------------------------------------------------------------
 
 sf7 = ggplot(sf7_wide, aes(x = analysis_label, y = diff, ymin = diff_lower, ymax = diff_upper)) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
@@ -784,10 +686,7 @@ sf7 = ggplot(sf7_wide, aes(x = analysis_label, y = diff, ymin = diff_lower, ymax
 
 sf7
 
-ggsave(
-  here("output", "figures", "figure_s07_sensitivity_auroc_diff.pdf"),
-  sf7, width = 12, height = 5
-)
+ggsave(here("output", "figures", "figure_s07_sensitivity_auroc_diff.pdf"), sf7, width = 12, height = 5)
 
 
 # ==============================================================================
@@ -803,9 +702,7 @@ sf8_noncancer_prep = maxscores_ca_raw |>
   fsummarise(n = fsum(n)) |>
   fungroup()
 
-sf8_noncancer_combos = unique(sf8_noncancer_prep$score_name)
-
-sf8_noncancer = lapply(sf8_noncancer_combos, function(sc) {
+sf8_noncancer = lapply(unique(sf8_noncancer_prep$score_name), function(sc) {
   d = fsubset(sf8_noncancer_prep, score_name == sc)
   result = calc_auroc_from_counts(d)
   result$score_name = sc
@@ -825,7 +722,7 @@ sf8_data = liquid_aurocs_final |>
 
 pal_cancer_type = c("Non-Cancer" = "#4575b4", "Solid" = "#f4a582", "Hematologic" = "#d73027")
 
-## plot ------------------------------------------------------------------------
+## plot and save ---------------------------------------------------------------
 
 sf8 = ggplot(sf8_data, aes(x = score_label, y = auroc, fill = cancer_type)) +
   geom_errorbar(
@@ -845,13 +742,133 @@ sf8 = ggplot(sf8_data, aes(x = score_label, y = auroc, fill = cancer_type)) +
 
 sf8
 
-ggsave(
-  here("output", "figures", "figure_s08_heme_solid_auroc.pdf"),
-  sf8, width = 8, height = 5
-)
+ggsave(here("output", "figures", "figure_s08_heme_solid_auroc.pdf"), sf8, width = 8, height = 5)
+
 
 # ==============================================================================
-# Done
+# SUPP FIGURE 9: Score Co-Positivity (Mirrored UpSet-style)
+# ==============================================================================
+
+## data prep -------------------------------------------------------------------
+
+score_cols = c("sirs", "qsofa", "mews", "mews_sf", "news")
+
+upset_agg = upset |>
+  fgroup_by(ca_01, sirs, qsofa, mews, mews_sf, news) |>
+  fsummarise(n = fsum(n)) |>
+  fungroup() |>
+  fmutate(
+    combo = paste(sirs, qsofa, mews, mews_sf, news, sep = "-"),
+    combo_label = pmap_chr(
+      list(sirs, qsofa, mews, mews_sf, news),
+      function(s, q, m, ms, n) {
+        scores = c("SIRS", "QSOFA", "MEWS", "MEWS-SF", "NEWS")[c(s, q, m, ms, n) == 1]
+        if (length(scores) == 0) return("None")
+        paste(scores, collapse = " + ")
+      }
+    ),
+    n_positive   = sirs + qsofa + mews + mews_sf + news,
+    cohort_label = fifelse(ca_01 == 1, "Cancer", "Non-Cancer")
+  )
+
+top_combos = upset_agg |>
+  fsubset(n_positive > 0) |>
+  fgroup_by(combo, combo_label, sirs, qsofa, mews, mews_sf, news, n_positive) |>
+  fsummarise(total_n = fsum(n)) |>
+  fungroup() |>
+  arrange(-total_n) |>
+  head(15) |>
+  pull(combo)
+
+upset_plot_data = upset_agg |>
+  fsubset(combo %in% top_combos) |>
+  fgroup_by(ca_01) |>
+  fmutate(total_cohort = fsum(n), pct = n / total_cohort * 100) |>
+  fungroup() |>
+  fmutate(
+    n_mirror   = fifelse(ca_01 == 1, -n, n),
+    pct_mirror = fifelse(ca_01 == 1, -pct, pct)
+  )
+
+combo_order = upset_plot_data |>
+  fgroup_by(combo_label) |>
+  fsummarise(total = fsum(n)) |>
+  arrange(-total) |>
+  pull(combo_label)
+
+upset_plot_data = upset_plot_data |>
+  fmutate(combo_label = factor(combo_label, levels = rev(combo_order)))
+
+## bar plot --------------------------------------------------------------------
+
+p_bars = ggplot(upset_plot_data, aes(x = combo_label, y = n_mirror, fill = cohort_label)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  geom_hline(yintercept = 0, linewidth = 0.3) +
+  scale_fill_manual(values = pal_cancer, name = "Cohort") +
+  scale_y_continuous(labels = function(x) scales::comma(abs(x)), breaks = scales::pretty_breaks(n = 6)) +
+  coord_flip() +
+  labs(x = NULL, y = "Number of Encounters", title = "Score Co-Positivity Patterns") +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position    = "top",
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor   = element_blank(),
+    axis.text.y        = element_blank(),
+    plot.title         = element_text(face = "bold", hjust = 0.5)
+  )
+
+## matrix plot -----------------------------------------------------------------
+
+matrix_data = upset_plot_data |>
+  fselect(combo_label, sirs, qsofa, mews, mews_sf, news) |>
+  funique() |>
+  pivot_longer(cols = c(sirs, qsofa, mews, mews_sf, news), names_to = "score", values_to = "positive") |>
+  fmutate(
+    score_label = factor(score,
+                         levels = c("sirs", "qsofa", "mews", "mews_sf", "news"),
+                         labels = c("SIRS", "QSOFA", "MEWS", "MEWS-SF", "NEWS"))
+  )
+
+p_matrix = ggplot(matrix_data, aes(x = score_label, y = combo_label)) +
+  geom_point(aes(color = factor(positive)), size = 3) +
+  scale_color_manual(values = c("0" = "gray80", "1" = "gray20"), guide = "none") +
+  labs(x = NULL, y = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid  = element_blank(),
+    axis.text.y = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, face = "bold", size = 9)
+  )
+
+matrix_lines = matrix_data |>
+  fsubset(positive == 1) |>
+  fgroup_by(combo_label) |>
+  fmutate(x_num = as.numeric(score_label), x_min = fmin(x_num), x_max = fmax(x_num)) |>
+  fungroup() |>
+  fsubset(x_min != x_max) |>
+  fselect(combo_label, x_min, x_max) |>
+  funique()
+
+if (nrow(matrix_lines) > 0) {
+  p_matrix = p_matrix +
+    geom_segment(
+      data = matrix_lines,
+      aes(x = x_min, xend = x_max, y = combo_label, yend = combo_label),
+      linewidth = 0.8, color = "gray20"
+    )
+}
+
+## assemble and save -----------------------------------------------------------
+
+sf9 = p_matrix + p_bars + plot_layout(widths = c(1, 3))
+
+sf9
+
+ggsave(here("output", "figures", "figure_s09_upset_mirrored.pdf"), sf9, width = 10, height = 8)
+
+
+# ==============================================================================
+# DONE
 # ==============================================================================
 
 message("All figures saved to: ", here("output", "figures"))
