@@ -12,7 +12,6 @@ library(here)
 # configuration ----------------------------------------------------------------
 
 ALLOWED_SITES = c(
-  
   "emory",
   "hopkins",
   "ohsu",
@@ -42,8 +41,53 @@ today = format(Sys.Date(), "%y%m%d")
 
 # helper functions -------------------------------------------------------------
 
+#' Parse analysis variant from file path or filename
+#' Checks both the folder structure and the filename for sensitivity markers
+#' Returns "main" for base analyses, variant name for sensitivity analyses
+parse_analysis_from_path = function(file_path) {
+  
+  # Check filename first (more specific)
+  filename = basename(file_path)
+  
+  variant = fcase(
+    str_detect(filename, "se_fullcode_only|se-fullcode-only"),   "fullcode_only",
+    str_detect(filename, "se_no_ed_req|se-no-ed-req"),           "no_ed_req",
+    str_detect(filename, "se_win0_96h|se-win0-96h"),             "win0_96h",
+    str_detect(filename, "se_win0_120h|se-win0-120h"),           "win0_120h",
+    str_detect(filename, "se_one_enc_per_pt|se-one-enc-per-pt"), "one_enc_per_pt",
+    default = NA_character_
+  )
+  
+  
+  # If not found in filename, check folder path
+  if (is.na(variant)) {
+    variant = fcase(
+      str_detect(file_path, "/sensitivity/"), "sensitivity",  # generic sensitivity flag
+      str_detect(file_path, "/main/"),        "main",
+      str_detect(file_path, "/threshold/"),   "main",
+      str_detect(file_path, "/horizon/"),     "main",
+      str_detect(file_path, "/meta/"),        "main",
+      str_detect(file_path, "/diagnostics/"), "main",
+      default = "main"
+    )
+  }
+  
+  return(variant)
+}
+
+#' Extract clean site name from file path
+extract_site_from_path = function(file_path, allowed_sites) {
+  path_parts = strsplit(file_path, "/")[[1]]
+  site_idx = which(path_parts %in% allowed_sites)
+  if (length(site_idx) > 0) {
+    return(path_parts[site_idx[1]])
+  }
+  return("unknown")
+}
+
 #' Read files matching a pattern from nested folder structure
 #' Structure: {site}/{analysis_type}/{filename}.csv
+#' Extracts site and analysis variant from file path
 read_grouped_files = function(main_folder, stem, exclude_pattern = NULL,
                               analysis_folders = c("main", "sensitivity", "threshold",
                                                    "horizon", "meta", "diagnostics")) {
@@ -55,7 +99,6 @@ read_grouped_files = function(main_folder, stem, exclude_pattern = NULL,
   site_folders = site_folders[basename(site_folders) %in% ALLOWED_SITES]
   
   # Search inside each site's analysis subfolders
-  
   for (site_folder in site_folders) {
     for (analysis_folder in analysis_folders) {
       search_path = file.path(site_folder, analysis_folder)
@@ -89,21 +132,14 @@ read_grouped_files = function(main_folder, stem, exclude_pattern = NULL,
   
   message("  Found ", length(all_files), " files matching '", stem, "'")
   
-  # Read and combine
+  # Read and combine, extracting metadata from path
   file_list = lapply(all_files, function(file_path) {
     file_data = fread(file_path)
     
-    # Extract site from path if not in data
-    if (!"site" %in% names(file_data)) {
-      # Site is the folder two levels up from the file
-      path_parts = strsplit(file_path, "/")[[1]]
-      site_idx   = which(path_parts %in% ALLOWED_SITES)
-      if (length(site_idx) > 0) {
-        file_data$site = path_parts[site_idx[1]]
-      } else {
-        file_data$site = "unknown"
-      }
-    }
+    # Always extract site and analysis from path (more reliable than file contents)
+    file_data$site = extract_site_from_path(file_path, ALLOWED_SITES)
+    file_data$analysis = parse_analysis_from_path(file_path)
+    file_data$.source_file = basename(file_path)  # for debugging
     
     file_data
   })
@@ -111,6 +147,10 @@ read_grouped_files = function(main_folder, stem, exclude_pattern = NULL,
   combined = rbindlist(file_list, fill = TRUE)
   
   message("  Loaded ", format(nrow(combined), big.mark = ","), " rows from ", length(file_list), " files")
+  
+  # Report what was loaded
+  analysis_summary = combined[, .N, by = analysis]
+  message("  Analysis variants: ", paste(analysis_summary$analysis, collapse = ", "))
   
   return(combined)
 }
@@ -151,9 +191,9 @@ read_site_root_files = function(main_folder, stem, exclude_pattern = NULL) {
   
   file_list = lapply(all_files, function(file_path) {
     file_data = fread(file_path)
-    if (!"site" %in% names(file_data)) {
-      file_data$site = basename(dirname(file_path))
-    }
+    file_data$site = extract_site_from_path(file_path, ALLOWED_SITES)
+    file_data$analysis = "main"
+    file_data$.source_file = basename(file_path)
     file_data
   })
   
@@ -191,12 +231,14 @@ read_table02_data = function(main_folder) {
     if (!is.na(cat_file)) {
       cat_data         = fread(cat_file)
       cat_data$site    = site
+      cat_data$analysis = "main"
       cat_list[[site]] = cat_data
     }
     
     if (!is.na(cont_file)) {
       cont_data         = fread(cont_file)
       cont_data$site    = site
+      cont_data$analysis = "main"
       cont_list[[site]] = cont_data
     }
   }
@@ -207,22 +249,6 @@ read_table02_data = function(main_folder) {
   message("  Loaded table02 data from ", length(cat_list), " sites")
   
   return(list(cat = cat_combined, cont = cont_combined))
-}
-
-#' Parse analysis variant from site column
-#' Returns "main" for base sites, variant name for sensitivity analyses
-parse_analysis_variant = function(site_col) {
-  
-  variant = fcase(
-    str_detect(site_col, "se_fullcode_only"),  "fullcode_only",
-    str_detect(site_col, "se_no_ed_req"),      "no_ed_req",
-    str_detect(site_col, "se_win0_96h"),       "win0_96h",
-    str_detect(site_col, "se_win0_120h"),      "win0_120h",
-    str_detect(site_col, "se_one_enc_per_pt"), "one_enc_per_pt",
-    default = "main"
-  )
-  
-  return(variant)
 }
 
 #' Format numbers with commas
@@ -261,7 +287,7 @@ flow_data_raw = read_site_root_files(here(), "figure_s01_flow")
 
 ## maxscores (encounter-level) -------------------------------------------------
 
-maxscores_ca_raw     = read_grouped_files(here(), "maxscores-ca",     exclude_pattern = "liquid")
+maxscores_ca_raw     = read_grouped_files(here(), "maxscores-ca", exclude_pattern = "liquid")
 maxscores_liquid_raw = read_grouped_files(here(), "maxscores-liquid")
 
 ## horizon counts (24h) --------------------------------------------------------
@@ -308,49 +334,27 @@ diag_overall_raw   = read_grouped_files(here(), "overall")
 diag_by_cancer_raw = read_grouped_files(here(), "by_cancer")
 diag_max_raw       = read_grouped_files(here(), "max_scores")
 
-# process and add analysis variant ---------------------------------------------
+# clean up score names ---------------------------------------------------------
 
 message("\n== Processing data ==")
 
-## add analysis variant to maxscores -------------------------------------------
-
-if (nrow(maxscores_ca_raw) > 0) {
-  maxscores_ca_raw[, analysis := parse_analysis_variant(site)]
-  maxscores_ca_raw[, score_name := str_remove(score_name, "_total")]
+clean_score_names = function(dt) {
+  if ("score_name" %in% names(dt) && nrow(dt) > 0) {
+    dt[, score_name := str_remove(score_name, "_total")]
+  }
+  invisible(dt)
 }
 
-## add analysis variant to horizon counts --------------------------------------
-
-if (nrow(counts_h24_raw) > 0) {
-  counts_h24_raw[, analysis := parse_analysis_variant(site)]
-  counts_h24_raw[, score_name := str_remove(score_name, "_total")]
-}
-
-if (nrow(counts_h12_raw) > 0) {
-  counts_h12_raw[, analysis := parse_analysis_variant(site)]
-  counts_h12_raw[, score_name := str_remove(score_name, "_total")]
-}
-
-## add analysis variant to site-level AUROCs -----------------------------------
-
-if (nrow(auroc_enc_raw) > 0) {
-  auroc_enc_raw[, analysis := parse_analysis_variant(site)]
-  auroc_enc_raw[, score_name := str_remove(score_name, "_total")]
-  # clean site name (remove variant suffix for actual site)
-  auroc_enc_raw[, site_clean := str_remove(site, "_se_.*$")]
-}
-
-if (nrow(auroc_h24_raw) > 0) {
-  auroc_h24_raw[, analysis := parse_analysis_variant(site)]
-  auroc_h24_raw[, score_name := str_remove(score_name, "_total")]
-  auroc_h24_raw[, site_clean := str_remove(site, "_se_.*$")]
-}
-
-if (nrow(auroc_h12_raw) > 0) {
-  auroc_h12_raw[, analysis := parse_analysis_variant(site)]
-  auroc_h12_raw[, score_name := str_remove(score_name, "_total")]
-  auroc_h12_raw[, site_clean := str_remove(site, "_se_.*$")]
-}
+clean_score_names(maxscores_ca_raw)
+clean_score_names(maxscores_liquid_raw)
+clean_score_names(counts_h24_raw)
+clean_score_names(counts_h12_raw)
+clean_score_names(counts_liquid_raw)
+clean_score_names(auroc_enc_raw)
+clean_score_names(auroc_liquid_enc)
+clean_score_names(auroc_h24_raw)
+clean_score_names(auroc_h12_raw)
+clean_score_names(auroc_liquid_h24)
 
 # summary ----------------------------------------------------------------------
 
@@ -361,3 +365,90 @@ message("  24h counts rows: ", format_n(nrow(counts_h24_raw)))
 message("  Site-level AUROCs (encounter): ", format_n(nrow(auroc_enc_raw)))
 message("  Site-level AUROCs (24h): ", format_n(nrow(auroc_h24_raw)))
 message("  Table02 cat rows: ", format_n(nrow(cat_data_raw)))
+
+# Validation check -------------------------------------------------------------
+
+message("\n== Validation ==")
+
+validation_errors = character(0)
+
+# Check maxscores by analysis variant
+if (nrow(maxscores_ca_raw) > 0) {
+  n_by_analysis = maxscores_ca_raw[score_name == "sirs", .(
+    total_n = sum(n),
+    n_sites = uniqueN(site)
+  ), by = analysis]
+  message("  Maxscores by analysis (SIRS as reference):")
+  print(n_by_analysis)
+}
+
+# Cross-check against flow diagram
+if (nrow(flow_data_raw) > 0 && nrow(maxscores_ca_raw) > 0) {
+  
+  message("\n  Cross-checking maxscores against flow diagram...")
+  
+  # Get final cohort N from flow diagram (last row per site)
+  flow_final = flow_data_raw[step %like% "outcomes too early", .(
+    flow_n_ca = n_remaining_ca,
+    flow_n_no = n_remaining_no,
+    flow_n_total = n_remaining_ca + n_remaining_no
+  ), by = site]
+  
+  # Get maxscores N for main analysis (using one score as reference)
+  maxscores_main = maxscores_ca_raw[analysis == "main" & score_name == "sirs", .(
+    maxscores_n_ca = sum(n[ca_01 == 1]),
+    maxscores_n_no = sum(n[ca_01 == 0]),
+    maxscores_n_total = sum(n)
+  ), by = site]
+  
+  # Compare
+  validation = merge(flow_final, maxscores_main, by = "site", all = TRUE)
+  validation[, `:=`(
+    diff_ca = maxscores_n_ca - flow_n_ca,
+    diff_no = maxscores_n_no - flow_n_no,
+    diff_total = maxscores_n_total - flow_n_total
+  )]
+  validation[, match := fifelse(
+    abs(diff_ca) <= 10 & abs(diff_no) <= 10, 
+    "OK", 
+    "MISMATCH"
+  )]
+  
+  print(validation[, .(site, flow_n_total, maxscores_n_total, diff_total, match)])
+  
+  if (any(validation$match == "MISMATCH", na.rm = TRUE)) {
+    validation_errors = c(validation_errors, 
+                          paste("Flow diagram vs maxscores mismatch for sites:", 
+                                paste(validation[match == "MISMATCH", site], collapse = ", ")))
+  }
+  
+  if (any(is.na(validation$match))) {
+    validation_errors = c(validation_errors,
+                          paste("Missing validation data for sites:",
+                                paste(validation[is.na(match), site], collapse = ", ")))
+  }
+}
+
+# Check for unexpected duplicates
+if (nrow(maxscores_ca_raw) > 0) {
+  dup_check = maxscores_ca_raw[analysis == "main", 
+                               .N, 
+                               by = .(site, score_name, ca_01, max_value, outcome)]
+  dups = dup_check[N > 1]
+  if (nrow(dups) > 0) {
+    message("  WARNING: Duplicate rows detected in main analysis:")
+    print(head(dups, 10))
+    validation_errors = c(validation_errors,
+                          paste("Duplicate rows in main analysis:", nrow(dups), "combinations affected"))
+  } else {
+    message("  No duplicate rows in main analysis")
+  }
+}
+
+# Stop if any validation errors
+if (length(validation_errors) > 0) {
+  stop("\n\nVALIDATION FAILED:\n
+", paste(" - ", validation_errors, collapse = "\n"), "\n\n")
+} else {
+  message("\n  All validation checks passed")
+}
