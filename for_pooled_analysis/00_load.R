@@ -334,6 +334,96 @@ diag_overall_raw   = read_grouped_files(here(), "overall")
 diag_by_cancer_raw = read_grouped_files(here(), "by_cancer")
 diag_max_raw       = read_grouped_files(here(), "max_scores")
 
+# ==============================================================================
+# DERIVED CONSTANTS: COHORT_N and VARIANT_N
+# ==============================================================================
+
+message("\n== Computing cohort and variant Ns ==")
+
+# COHORT_N: Main analysis encounter counts by cancer status
+# This is the canonical source for "n=" labels in figures
+if (nrow(diag_overall_raw) > 0) {
+  
+  # Pool across sites for main analysis
+  COHORT_N_DT = diag_overall_raw[variant == "main", .(
+    n_enc_ca   = sum(n_enc_ca,   na.rm = TRUE),
+    n_enc_noca = sum(n_enc_noca, na.rm = TRUE),
+    n_enc      = sum(n_enc,      na.rm = TRUE),
+    n_pat      = sum(n_pat,      na.rm = TRUE)
+  )]
+  
+  # Named vector for format_cohort() function
+  COHORT_N = setNames(
+    c(COHORT_N_DT$n_enc_noca, COHORT_N_DT$n_enc_ca),
+    c("0", "1")
+  )
+  
+  message("  Main cohort: ", format_n(COHORT_N["0"]), " non-cancer, ", 
+          format_n(COHORT_N["1"]), " cancer encounters")
+  
+} else {
+  # Fallback: calculate from flow diagram
+  message("  WARNING: No diagnostics data, falling back to flow diagram")
+  
+  if (nrow(flow_data_raw) > 0) {
+    flow_final = flow_data_raw[step %like% "outcomes too early", .(
+      n_ca = sum(n_remaining_ca),
+      n_no = sum(n_remaining_no)
+    )]
+    
+    COHORT_N = setNames(
+      c(flow_final$n_no, flow_final$n_ca),
+      c("0", "1")
+    )
+  } else {
+    COHORT_N = setNames(c(NA_integer_, NA_integer_), c("0", "1"))
+    warning("Could not determine COHORT_N from diagnostics or flow diagram")
+  }
+}
+
+# VARIANT_N: Encounter counts for each sensitivity analysis variant
+# Used for SF07 and other sensitivity analysis figures
+if (nrow(diag_overall_raw) > 0) {
+  
+  VARIANT_N_DT = diag_overall_raw[, .(
+    n_enc      = sum(n_enc,      na.rm = TRUE),
+    n_enc_ca   = sum(n_enc_ca,   na.rm = TRUE),
+    n_enc_noca = sum(n_enc_noca, na.rm = TRUE)
+  ), by = variant]
+  
+  # Clean variant names (remove se_ prefix for consistency)
+  VARIANT_N_DT[, variant_clean := gsub("^se_", "", variant)]
+  
+  # Named vector for easy lookup
+  VARIANT_N = setNames(VARIANT_N_DT$n_enc, VARIANT_N_DT$variant_clean)
+  
+  message("  Variant Ns:")
+  for (v in names(VARIANT_N)) {
+    message("    ", v, ": ", format_n(VARIANT_N[v]))
+  }
+  
+} else {
+  VARIANT_N = c(main = sum(COHORT_N))
+  warning("Could not determine VARIANT_N from diagnostics")
+}
+
+# SITE_N: Encounter counts by site (for SF04, SF06)
+if (nrow(diag_overall_raw) > 0) {
+  
+  SITE_N_DT = diag_overall_raw[variant == "main", .(
+    n_enc      = sum(n_enc,      na.rm = TRUE),
+    n_enc_ca   = sum(n_enc_ca,   na.rm = TRUE),
+    n_enc_noca = sum(n_enc_noca, na.rm = TRUE)
+  ), by = site]
+  
+  SITE_N = setNames(SITE_N_DT$n_enc, SITE_N_DT$site)
+  
+  message("  Site Ns: ", paste(names(SITE_N), "=", format_n(SITE_N), collapse = ", "))
+  
+} else {
+  SITE_N = setNames(rep(NA_integer_, length(ALLOWED_SITES)), ALLOWED_SITES)
+}
+
 # clean up score names ---------------------------------------------------------
 
 message("\n== Processing data ==")
