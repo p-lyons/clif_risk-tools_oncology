@@ -47,12 +47,34 @@ format_score = function(x) {
   factor(x, levels = score_levels, labels = score_labels)
 }
 
-format_cohort = function(ca_01) {
-  factor(
-    fifelse(ca_01 == 1, "Cancer", "Non-Cancer"),
-    levels = c("Non-Cancer", "Cancer")
-  )
+format_cohort = function(ca_01, n_by_cohort = NULL) {
+  # If n_by_cohort provided, create labels with sample sizes
+  if (!is.null(n_by_cohort)) {
+    lab_noca = sprintf("Non-Cancer (n=%s)", format(n_by_cohort["0"], big.mark = ","))
+    lab_ca   = sprintf("Cancer (n=%s)", format(n_by_cohort["1"], big.mark = ","))
+    factor(
+      fifelse(ca_01 == 1, lab_ca, lab_noca),
+      levels = c(lab_noca, lab_ca)
+    )
+  } else {
+    factor(
+      fifelse(ca_01 == 1, "Cancer", "Non-Cancer"),
+      levels = c("Non-Cancer", "Cancer")
+    )
+  }
 }
+
+# Helper to build palette matching cohort labels (with or without n)
+build_cohort_palette = function(cohort_labels) {
+  setNames(c("#4575b4", "#d73027"), cohort_labels)
+}
+
+# Verify constants from 00_load.R
+if (!exists("COHORT_N")) stop("COHORT_N not found. Source 00_load.R first.")
+if (!exists("VARIANT_N")) message("WARNING: VARIANT_N not found")
+if (!exists("SITE_N")) message("WARNING: SITE_N not found")
+message("Using COHORT_N: ", format(COHORT_N["0"], big.mark=","), " non-cancer, ",
+        format(COHORT_N["1"], big.mark=","), " cancer")
 
 calc_auroc_from_counts = function(data) {
   
@@ -112,13 +134,15 @@ fig1_data = maxscores_ca_raw |>
   fmutate(
     prob         = n_outcomes / n_at_score,
     score_label  = format_score(score_name),
-    cohort_label = format_cohort(ca_01)
+    cohort_label = format_cohort(ca_01, COHORT_N)
   ) |>
   fsubset(n_outcomes >= 100)
 
+fig1_pal = build_cohort_palette(levels(fig1_data$cohort_label))
+
 ## panel function --------------------------------------------------------------
 
-fig1_panel = function(data, score, show_y = TRUE, x_breaks = NULL) {
+fig1_panel = function(data, score, show_y = TRUE, x_breaks = NULL, pal = fig1_pal) {
   
   panel_data = fsubset(data, score_label == score)
   
@@ -126,7 +150,7 @@ fig1_panel = function(data, score, show_y = TRUE, x_breaks = NULL) {
     geom_line(linewidth = 0.6, alpha = 0.3) +
     geom_point(aes(size = n_at_score), alpha = 0.75) +
     facet_wrap(~score_label) +
-    scale_color_manual(values = pal_cancer) +
+    scale_color_manual(values = pal) +
     scale_size_area(labels = label_comma(), breaks = c(100000, 300000, 500000)) +
     scale_y_continuous(labels = label_percent(), limits = c(0, 0.9), breaks = seq(0, 0.9, 0.15)) +
     theme_ews() +
@@ -150,14 +174,14 @@ fig1_news   = fig1_panel(fig1_data, "NEWS",    show_y = FALSE, x_breaks = seq(0,
 ## legend ----------------------------------------------------------------------
 
 fig1_legend_data = tidytable(
-  cohort_label = factor(c("Non-Cancer", "Cancer"), levels = c("Non-Cancer", "Cancer")),
+  cohort_label = factor(levels(fig1_data$cohort_label), levels = levels(fig1_data$cohort_label)),
   n_at_score   = c(100000, 500000),
   x = 1, y = 1
 )
 
 fig1_legend = ggplot(fig1_legend_data, aes(x = x, y = y, color = cohort_label, size = n_at_score)) +
   geom_point() +
-  scale_color_manual(values = pal_cancer) +
+  scale_color_manual(values = fig1_pal, name = "Cohort") +
   scale_size_area(labels = label_comma(), breaks = c(100000, 300000, 500000)) +
   xlim(10, 20) + ylim(10, 20) +
   guides(
@@ -196,8 +220,10 @@ fig2_data = auroc_results_final |>
   fsubset(analysis == "main" & metric == "Encounter max") |>
   fmutate(
     score_label  = format_score(score_name),
-    cohort_label = format_cohort(ca_01)
+    cohort_label = format_cohort(ca_01, COHORT_N)
   )
+
+fig2_pal = build_cohort_palette(levels(fig2_data$cohort_label))
 
 ## plot and save ---------------------------------------------------------------
 
@@ -211,7 +237,7 @@ fig2 = ggplot(fig2_data, aes(x = score_label, y = auroc, fill = cohort_label)) +
     shape = 21, color = "black", size = 4, stroke = 0.7,
     position = position_dodge(width = 0.6)
   ) +
-  scale_fill_manual(values = pal_cancer, name = "Cohort") +
+  scale_fill_manual(values = fig2_pal, name = "Cohort") +
   scale_y_continuous(limits = c(0.58, 0.80), breaks = seq(0.60, 0.80, 0.05)) +
   labs(x = NULL, y = "AUROC (95% CI)") +
   theme_ews() +
@@ -236,16 +262,18 @@ fig3_data = cuminc_raw |>
   fmutate(
     cum_inc      = n_became_pos / n_at_risk,
     score_label  = format_score(score),
-    cohort_label = format_cohort(ca_01),
+    cohort_label = format_cohort(ca_01, COHORT_N),
     time_days    = time_bin_start / 24
   )
+
+fig3_pal = build_cohort_palette(levels(fig3_data$cohort_label))
 
 ## plot and save ---------------------------------------------------------------
 
 fig3 = ggplot(fig3_data, aes(x = time_days, y = cum_inc, color = cohort_label)) +
   geom_step(linewidth = 0.7) +
   facet_wrap(~score_label, nrow = 1) +
-  scale_color_manual(values = pal_cancer, name = "Cohort") +
+  scale_color_manual(values = fig3_pal, name = "Cohort") +
   scale_x_continuous(breaks = seq(0, 7, 2)) +
   scale_y_continuous(labels = label_percent()) +
   labs(x = "Days from Ward Admission", y = "Cumulative Incidence of Positivity") +
@@ -322,17 +350,19 @@ fig4_data = fig4_metrics |>
   fmutate(
     value        = fifelse(metric == "npv" & is.na(value) & threshold == 0, 1, value),
     score_label  = format_score(score_name),
-    cohort_label = format_cohort(ca_01),
+    cohort_label = format_cohort(ca_01, COHORT_N),
     metric_label = factor(metric,
                           levels = c("sens", "spec", "ppv", "npv"),
                           labels = c("Sensitivity", "Specificity", "PPV", "NPV"))
   )
 
+fig4_pal = build_cohort_palette(levels(fig4_data$cohort_label))
+
 fig4_data_main = fsubset(fig4_data, score_label %in% c("SIRS", "NEWS"))
 
 ## panel function --------------------------------------------------------------
 
-fig4_panel = function(data, score, show_y = TRUE) {
+fig4_panel = function(data, score, show_y = TRUE, pal = fig4_pal) {
   
   panel_data = fsubset(data, score_label == score)
   
@@ -340,7 +370,7 @@ fig4_panel = function(data, score, show_y = TRUE) {
     geom_line(linewidth = 0.7) +
     geom_point(size = 1.5) +
     facet_wrap(~metric_label, ncol = 1) +
-    scale_color_manual(values = pal_cancer, name = "Cohort") +
+    scale_color_manual(values = pal, name = "Cohort") +
     scale_y_continuous(labels = label_percent(), limits = c(0, 1)) +
     labs(x = NULL, title = score) +
     theme_ews() +
@@ -359,12 +389,12 @@ fig4_news = fig4_panel(fig4_data_main, "NEWS", show_y = FALSE)
 ## legend ----------------------------------------------------------------------
 
 fig4_legend = ggplot(
-  tidytable(cohort_label = factor(c("Non-Cancer", "Cancer"), levels = c("Non-Cancer", "Cancer")),
+  tidytable(cohort_label = factor(levels(fig4_data$cohort_label), levels = levels(fig4_data$cohort_label)),
             x = c(1, 2), y = c(1, 1)), 
   aes(x = x, y = y, color = cohort_label)
 ) +
   geom_point(size = 3) +
-  scale_color_manual(values = pal_cancer, name = "Cohort") +
+  scale_color_manual(values = fig4_pal, name = "Cohort") +
   xlim(10, 20) + ylim(10, 20) +
   guides(color = guide_legend(override.aes = list(size = 3))) +
   theme_void() +
@@ -396,7 +426,7 @@ sf2_data = maxscores_ca_raw |>
   fsummarise(n = fsum(n)) |>
   fmutate(
     score_label  = format_score(score_name),
-    cohort_label = format_cohort(ca_01),
+    cohort_label = format_cohort(ca_01, COHORT_N),
     n_mirror     = fifelse(ca_01 == 1, -n, n)
   ) |>
   fsubset(max_value <= 11)
@@ -407,7 +437,7 @@ sf2 = ggplot(sf2_data, aes(x = n_mirror, y = factor(max_value), fill = cohort_la
   geom_bar(stat = "identity", width = 0.8) +
   geom_vline(xintercept = 0, linewidth = 0.3, color = "black") +
   facet_wrap(~score_label, ncol = 1, scales = "free_y") +
-  scale_fill_manual(values = pal_cancer, name = "Cohort") +
+  scale_fill_manual(values = build_cohort_palette(levels(sf2_data$cohort_label)), name = "Cohort") +
   scale_x_continuous(labels = function(x) label_comma()(abs(x))) +
   labs(y = "Maximum Score Value", x = "Number of Encounters") +
   theme_ews() +
@@ -415,7 +445,7 @@ sf2 = ggplot(sf2_data, aes(x = n_mirror, y = factor(max_value), fill = cohort_la
 
 sf2
 
-ggsave(here("output", "figures", "figure_s02_score_histograms.pdf"), sf2, width = 4, height = 11)
+ggsave(here("output", "figures", "figure_s02_score_histograms.pdf"), sf2, width = 6, height = 11)
 
 
 # ==============================================================================
@@ -440,7 +470,9 @@ sf3_aurocs = map2(sf3_combos$score_name, sf3_combos$ca_01, function(sc, ca) {
   result
 }) |>
   bind_rows() |>
-  fmutate(score_label = format_score(score_name), cohort_label = format_cohort(ca_01))
+  fmutate(score_label = format_score(score_name), cohort_label = format_cohort(ca_01, COHORT_N))
+
+sf3_pal = build_cohort_palette(levels(sf3_aurocs$cohort_label))
 
 ## plot and save ---------------------------------------------------------------
 
@@ -454,7 +486,7 @@ sf3 = ggplot(sf3_aurocs, aes(x = score_label, y = auroc, fill = cohort_label)) +
     shape = 21, color = "black", size = 4, stroke = 0.7,
     position = position_dodge(width = 0.4)
   ) +
-  scale_fill_manual(values = pal_cancer, name = "Cohort") +
+  scale_fill_manual(values = sf3_pal, name = "Cohort") +
   scale_y_continuous(limits = c(0.62, 0.72), breaks = seq(0.62, 0.72, 0.02)) +
   labs(x = NULL, y = "AUROC (95% CI)") +
   theme_ews() +
@@ -492,7 +524,18 @@ sf4_aurocs = pmap(list(sf4_combos$site, sf4_combos$score_name, sf4_combos$ca_01)
   bind_rows()
 
 site_order  = sf4_aurocs |> fsubset(score_name == "news" & ca_01 == 0) |> arrange(auroc) |> pull(site)
-site_labels = setNames(LETTERS[seq_along(site_order)], site_order)
+
+# Get site Ns from SITE_N constant
+if (exists("SITE_N")) {
+  site_labels = setNames(
+    sprintf("%s (n=%s)", LETTERS[seq_along(site_order)], format(SITE_N[site_order], big.mark = ",")),
+    site_order
+  )
+  pooled_label = sprintf("Pooled (n=%s)", format(sum(SITE_N), big.mark = ","))
+} else {
+  site_labels = setNames(LETTERS[seq_along(site_order)], site_order)
+  pooled_label = "Pooled"
+}
 
 sf4_pooled_prep   = sf4_prep |> fgroup_by(score_name, ca_01, value, outcome) |> fsummarise(n = fsum(n)) |> fungroup()
 sf4_pooled_combos = sf4_pooled_prep |> fselect(score_name, ca_01) |> funique()
@@ -509,11 +552,13 @@ sf4_pooled = map2(sf4_pooled_combos$score_name, sf4_pooled_combos$ca_01, functio
 sf4_all = bind_rows(sf4_aurocs, sf4_pooled) |>
   fmutate(
     score_label  = format_score(score_name),
-    cohort_label = format_cohort(ca_01),
-    site_label   = fifelse(site == "pooled", "Pooled", site_labels[site]),
-    site_label   = factor(site_label, levels = c("Pooled", LETTERS[seq_along(site_order)])),
+    cohort_label = format_cohort(ca_01, COHORT_N),
+    site_label   = fifelse(site == "pooled", pooled_label, site_labels[site]),
+    site_label   = factor(site_label, levels = c(pooled_label, site_labels[site_order])),
     is_pooled    = site == "pooled"
   )
+
+sf4_pal = build_cohort_palette(levels(sf4_all$cohort_label))
 
 ## plot and save ---------------------------------------------------------------
 
@@ -530,7 +575,7 @@ sf4 = ggplot(sf4_all, aes(x = site_label, y = auroc, color = cohort_label)) +
   ) +
   geom_point(aes(shape = is_pooled), size = 2.5, position = position_dodge(width = 0.6)) +
   facet_wrap(~score_label, nrow = 1) +
-  scale_color_manual(values = pal_cancer, name = "Cohort") +
+  scale_color_manual(values = sf4_pal, name = "Cohort") +
   scale_shape_manual(values = c("FALSE" = 16, "TRUE" = 18), guide = "none") +
   scale_y_continuous(limits = c(0.60, 0.82), breaks = seq(0.60, 0.80, 0.05)) +
   coord_flip() +
@@ -540,7 +585,7 @@ sf4 = ggplot(sf4_all, aes(x = site_label, y = auroc, color = cohort_label)) +
 
 sf4
 
-ggsave(here("output", "figures", "figure_s04_auroc_by_site.pdf"), sf4, width = 12, height = 6)
+ggsave(here("output", "figures", "figure_s04_auroc_by_site.pdf"), sf4, width = 14, height = 6)
 
 
 # ==============================================================================
@@ -560,12 +605,12 @@ sf5_mewssf = fig4_panel(sf5_data, "MEWS-SF", show_y = FALSE)
 ## legend ----------------------------------------------------------------------
 
 sf5_legend = ggplot(
-  tidytable(cohort_label = factor(c("Non-Cancer", "Cancer"), levels = c("Non-Cancer", "Cancer")),
+  tidytable(cohort_label = factor(levels(fig4_data$cohort_label), levels = levels(fig4_data$cohort_label)),
             x = c(1, 2), y = c(1, 1)), 
   aes(x = x, y = y, color = cohort_label)
 ) +
   geom_point(size = 3) +
-  scale_color_manual(values = pal_cancer, name = "Cohort") +
+  scale_color_manual(values = fig4_pal, name = "Cohort") +
   xlim(10, 20) + ylim(10, 20) +
   guides(color = guide_legend(override.aes = list(size = 3))) +
   theme_void() +
@@ -591,14 +636,25 @@ ggsave(here("output", "figures", "figure_s05_threshold_performance_other.pdf"), 
 
 ## data prep -------------------------------------------------------------------
 
-site_order_sf6  = sort(unique(forest_data_final$site[forest_data_final$site != "Pooled"]))
-site_labels_sf6 = setNames(LETTERS[seq_along(site_order_sf6)], site_order_sf6)
+site_order_sf6 = sort(unique(forest_data_final$site[forest_data_final$site != "Pooled"]))
+
+# Add site Ns to labels
+if (exists("SITE_N")) {
+  site_labels_sf6 = setNames(
+    sprintf("%s (n=%s)", LETTERS[seq_along(site_order_sf6)], format(SITE_N[site_order_sf6], big.mark = ",")),
+    site_order_sf6
+  )
+  pooled_label_sf6 = sprintf("Pooled (n=%s)", format(sum(SITE_N), big.mark = ","))
+} else {
+  site_labels_sf6 = setNames(LETTERS[seq_along(site_order_sf6)], site_order_sf6)
+  pooled_label_sf6 = "Pooled"
+}
 
 sf6_data = forest_data_final |>
   fsubset(analysis == "main" | is.na(analysis)) |>
   fmutate(
-    site_label  = fifelse(is_pooled, "Pooled", site_labels_sf6[site]),
-    site_label  = factor(site_label, levels = c(LETTERS[seq_along(site_order_sf6)], "Pooled")),
+    site_label  = fifelse(is_pooled, pooled_label_sf6, site_labels_sf6[site]),
+    site_label  = factor(site_label, levels = c(site_labels_sf6[site_order_sf6], pooled_label_sf6)),
     score_label = format_score(score),
     abs_log_or  = abs(log(or_int))
   )
@@ -634,7 +690,7 @@ Stronger in cancer →"
 
 sf6
 
-ggsave(here("output", "figures", "figure_s06_interaction_forest.pdf"), sf6, width = 12, height = 6)
+ggsave(here("output", "figures", "figure_s06_interaction_forest.pdf"), sf6, width = 14, height = 6)
 
 
 # ==============================================================================
@@ -642,6 +698,25 @@ ggsave(here("output", "figures", "figure_s06_interaction_forest.pdf"), sf6, widt
 # ==============================================================================
 
 ## data prep -------------------------------------------------------------------
+
+# Use VARIANT_N for proper encounter counts per analysis
+if (exists("VARIANT_N")) {
+  sf7_labels = c(
+    main           = sprintf("Main (n=%s)", format(VARIANT_N["main"], big.mark = ",")),
+    one_enc_per_pt = sprintf("One enc/patient (n=%s)", format(VARIANT_N["one_enc_per_pt"], big.mark = ",")),
+    win0_96h       = sprintf("0-96h window (n=%s)", format(VARIANT_N["win0_96h"], big.mark = ",")),
+    fullcode_only  = sprintf("Full code only (n=%s)", format(VARIANT_N["fullcode_only"], big.mark = ",")),
+    no_ed_req      = sprintf("No ED req (n=%s)", format(VARIANT_N["no_ed_req"], big.mark = ","))
+  )
+} else {
+  sf7_labels = c(
+    main           = "Main",
+    one_enc_per_pt = "One encounter/patient",
+    win0_96h       = "0-96h window",
+    fullcode_only  = "Full code only",
+    no_ed_req      = "No ED requirement"
+  )
+}
 
 sf7_wide = auroc_results_final |>
   fsubset(metric == "Encounter max") |>
@@ -655,8 +730,8 @@ sf7_wide = auroc_results_final |>
     score_label = format_score(score_name),
     analysis_label = factor(
       analysis,
-      levels = c("main", "one_enc_per_pt", "win0_96h", "fullcode_only", "no_ed_req"),
-      labels = c("Main", "One encounter/patient", "0-96h window", "Full code only", "No ED requirement")
+      levels = names(sf7_labels),
+      labels = sf7_labels
     )
   )
 
@@ -768,7 +843,7 @@ upset_agg = upset |>
       }
     ),
     n_positive   = sirs + qsofa + mews + mews_sf + news,
-    cohort_label = fifelse(ca_01 == 1, "Cancer", "Non-Cancer")
+    cohort_label = format_cohort(ca_01, COHORT_N)
   )
 
 top_combos = upset_agg |>
@@ -799,12 +874,14 @@ combo_order = upset_plot_data |>
 upset_plot_data = upset_plot_data |>
   fmutate(combo_label = factor(combo_label, levels = rev(combo_order)))
 
+sf9_pal = build_cohort_palette(levels(upset_plot_data$cohort_label))
+
 ## bar plot --------------------------------------------------------------------
 
 p_bars = ggplot(upset_plot_data, aes(x = combo_label, y = n_mirror, fill = cohort_label)) +
   geom_bar(stat = "identity", width = 0.7) +
   geom_hline(yintercept = 0, linewidth = 0.3) +
-  scale_fill_manual(values = pal_cancer, name = "Cohort") +
+  scale_fill_manual(values = sf9_pal, name = "Cohort") +
   scale_y_continuous(labels = function(x) scales::comma(abs(x)), breaks = scales::pretty_breaks(n = 6)) +
   coord_flip() +
   labs(x = NULL, y = "Number of Encounters", title = "Score Co-Positivity Patterns") +
@@ -865,7 +942,6 @@ sf9 = p_matrix + p_bars + plot_layout(widths = c(1, 3))
 sf9
 
 ggsave(here("output", "figures", "figure_s09_upset_mirrored.pdf"), sf9, width = 10, height = 8)
-
 
 # ==============================================================================
 # DONE
