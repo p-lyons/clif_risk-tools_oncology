@@ -481,7 +481,7 @@ scores$ed_admit_01 = if_else(scores$joined_hosp_id %in% ed, 1L, 0L)
 
 write_parquet(scores, here("proj_tables", "scores_full.parquet"))
 
-rm(ward_times, outcomes, cancer, ed, data_list); gc()
+rm(list = ls()); gc() # clear memory to help 03 run
 
 # go to 03
 
