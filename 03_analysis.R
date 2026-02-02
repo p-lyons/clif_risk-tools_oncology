@@ -1,4 +1,5 @@
 scores = read_parquet(here("proj_tables", "scores_full.parquet"))
+cohort = read_parquet(here("proj_tables", "cohort.parquet"))
 
 # constants --------------------------------------------------------------------
 
