@@ -479,10 +479,16 @@ scores$ed_admit_01 = if_else(scores$joined_hosp_id %in% ed, 1L, 0L)
 
 # save scores ------------------------------------------------------------------
 
-write_parquet(scores, here("proj_tables", "scores_full.parquet"))
-saveRDS(site_lowercase, here("proj_tables", "site_lowercase.rds"))
+.n_score_rows = nrow(scores)
 
-rm(list = ls()); gc() # clear memory to help 03 run
+write_parquet(scores, here("proj_tables", "scores_full.parquet"))
+
+rm(list = setdiff(
+  ls(),
+  c("start_time", "run_log", "site_lowercase", "here", "cohort_hids", ".n_score_rows")
+))
+
+gc() # clear memory to help 03 run
 
 # go to 03
 
