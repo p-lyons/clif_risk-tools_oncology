@@ -1,5 +1,6 @@
-scores = read_parquet(here("proj_tables", "scores_full.parquet"))
-cohort = read_parquet(here("proj_tables", "cohort.parquet"))
+scores         = read_parquet(here("proj_tables", "scores_full.parquet"))
+cohort         = read_parquet(here("proj_tables", "cohort.parquet"))
+site_lowercase = readRDS(here("proj_tables", "site_lowercase.rds"))
 
 # constants --------------------------------------------------------------------
 
