@@ -158,7 +158,7 @@ fig1_panel = function(data, score, show_y = TRUE, x_breaks = NULL, pal = fig1_pa
     labs(x = NULL)
   
   if (!is.null(x_breaks)) p = p + scale_x_continuous(breaks = x_breaks)
-  if (show_y) p = p + labs(y = "Deterioration Risk (%)") else p = p + labs(y = NULL)
+  if (show_y) p = p + labs(y = "Observed Deterioration Rate (%)") else p = p + labs(y = NULL)
   
   p
 }
@@ -209,7 +209,6 @@ fig1
 
 ggsave(here("output", "figures", "figure_01_risk_by_score.pdf"), fig1, width = 10, height = 6)
 
-
 # ==============================================================================
 # FIGURE 2: AUROC Comparison (Main Analysis)
 # ==============================================================================
@@ -247,7 +246,6 @@ fig2
 
 ggsave(here("output", "figures", "figure_02_auroc_main.pdf"), fig2, width = 7, height = 5)
 
-
 # ==============================================================================
 # FIGURE 3: Cumulative Incidence of Positivity
 # ==============================================================================
@@ -283,7 +281,6 @@ fig3 = ggplot(fig3_data, aes(x = time_days, y = cum_inc, color = cohort_label)) 
 fig3
 
 ggsave(here("output", "figures", "figure_03_cuminc.pdf"), fig3, width = 10, height = 4)
-
 
 # ==============================================================================
 # FIGURE 4: Threshold-Performance Plots (SIRS and NEWS)
