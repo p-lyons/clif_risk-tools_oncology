@@ -18,7 +18,7 @@ run_log$outcome_rate = mean(cohort$dead_01 + cohort$hospice_01 > 0)
 message("Calculating scores...")
 source("02_scores.R")
 run_log$scores_time  = Sys.time()
-run_log$n_score_rows = nrow(scores)
+run_log$n_score_rows = .n_score_rows 
 
 message("Performing analysis...")
 source("03_analysis.R")
