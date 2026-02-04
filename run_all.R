@@ -4,11 +4,11 @@ start_time = Sys.time()
 run_log    = list()
 
 message("Starting data import/validation...")
-source("00_setup.R")
+source("code/00_setup.R")
 run_log$setup_time = Sys.time()
 
 message("Cleaning data...")
-source("01_cohort.R")
+source("code/01_cohort.R")
 run_log$cohort_time  = Sys.time()
 run_log$n_cohort     = nrow(cohort)
 run_log$n_cancer     = sum(cohort$ca_01 == 1)
@@ -16,12 +16,12 @@ run_log$n_ed_admit   = sum(cohort$ed_admit_01 == 1)
 run_log$outcome_rate = mean(cohort$dead_01 + cohort$hospice_01 > 0)
 
 message("Calculating scores...")
-source("02_scores.R")
+source("code/02_scores.R")
 run_log$scores_time  = Sys.time()
 run_log$n_score_rows = .n_score_rows 
 
 message("Performing analysis...")
-source("03_analysis.R")
+source("code/03_analysis.R")
 run_log$analysis_time = Sys.time()
 
 # summary report
