@@ -5,6 +5,31 @@ if (!exists("site_lowercase")) {
   site_lowercase = readRDS(here("proj_tables", "site_lowercase.rds"))
 }
 
+# cleanup old artifacts --------------------------------------------------------
+# Remove existing artifacts to prevent duplicates from old naming conventions
+# Only cleans subdirectories (main/, threshold/, etc.) - not root-level files
+
+cleanup_artifact_dirs = function(root = "upload_to_box") {
+  
+  subdirs = c("main", "threshold", "sensitivity", "horizon", "diagnostics", "meta")
+  
+  for (subdir in subdirs) {
+    dir_path = file.path(root, subdir)
+    if (dir.exists(dir_path)) {
+      old_files = list.files(dir_path, pattern = "\\.csv$", full.names = TRUE)
+      if (length(old_files) > 0) {
+        message("  Removing ", length(old_files), " old files from ", subdir, "/")
+        file.remove(old_files)
+      }
+    }
+  }
+  
+  invisible(NULL)
+}
+
+message("\n== Cleaning up old artifacts ==")
+cleanup_artifact_dirs()
+
 # constants --------------------------------------------------------------------
 
 THRESHOLDS = tidytable(
