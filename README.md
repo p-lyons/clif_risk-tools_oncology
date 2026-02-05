@@ -80,15 +80,13 @@ Each participating site runs this pipeline locally on their data. Only aggregate
 │   ├── outcome_times.csv
 │   └── hid_jid_crosswalk.parquet
 │
-├── proj_output/                    # Final outputs for pooling (auto-created)
+├── upload_to_box/                  # Final outputs for pooling (auto-created)
 │   ├── main/                       # Primary analysis artifacts
 │   ├── sensitivity/                # Sensitivity analysis variants
 │   ├── horizon/                    # 12h and 24h prediction windows
 │   ├── threshold/                  # Threshold-based metrics
 │   ├── meta/                       # Coefficients for meta-analysis
 │   └── diagnostics/                # QC and validation outputs
-│
-├── upload_to_box/                  # Files to share with coordinating center
 │
 ├── oncrisk.Rproj                   # RStudio project file
 └── README.md
@@ -109,7 +107,7 @@ The pipeline requires the following tables in your `clif_data_location` director
 | `clif_adt` | ADT events for ward/ICU identification |
 | `clif_hospital_diagnosis` | ICD-10-CM codes for cancer identification |
 | `clif_vitals` | Heart rate, respiratory rate, temperature, blood pressure, SpO₂ |
-| `clif_labs` | WBC, lactate (for SIRS criteria) |
+| `clif_labs` | WBC, pCO₂ (for SIRS criteria) |
 | `clif_respiratory_support` | Device type, FiO₂, flow rates |
 | `clif_medication_admin_continuous` | Vasopressor administration |
 | `clif_code_status` | Code status for sensitivity analysis |
@@ -118,7 +116,7 @@ The pipeline requires the following tables in your `clif_data_location` director
 ### System Requirements
 
 - **R** ≥ 4.1.0
-- **RAM** ≥ 16 GB recommended (scales with dataset size)
+- **RAM** ≥ 20 GB required (peak memory usage can exceed 20 GB during score calculation and analysis)
 - **Disk** — Sufficient space for intermediate Parquet files
 
 ### R Package Dependencies
@@ -136,7 +134,7 @@ arrow, fst, readr, readxl, yaml
 pROC, glmmTMB, comorbidity
 
 # Utilities
-here, stringr, zoo, ps, rvest
+here, stringr, zoo, ps
 ```
 
 > **Note:** The `arrow` package may require system libraries on Linux. See [Apache Arrow installation guide](https://arrow.apache.org/docs/r/articles/install.html) if you encounter build errors.
@@ -154,7 +152,7 @@ here, stringr, zoo, ps, rvest
 
 2. **Open the RStudio project**
 
-   Double-click `oncrisk.Rproj` or open it from RStudio.
+   Double-click `oncrisk.Rproj` or open it from RStudio. **Do not run scripts directly without first opening the project file**—the `here` package requires the project context to resolve file paths correctly.
 
 3. **Configure your site settings**
 
@@ -180,7 +178,7 @@ file_type: "parquet"
 # Path to directory containing CLIF tables
 clif_data_location: "/path/to/clif/data"
 
-# Output directory (proj_tables/ and proj_output/ created here)
+# Output directory (proj_tables/ and upload_to_box/ created here)
 project_location: "/path/to/project/root"
 ```
 
@@ -212,18 +210,22 @@ upenn
 
 ## Usage
 
-### Quick Start
+> **Important:** Always open the RStudio project file (`oncrisk.Rproj`) before running any scripts. The pipeline uses the `here` package, which requires the project context to resolve file paths correctly.
+
+### Standard Execution (≥20 GB RAM available)
+
+If your system has at least 20 GB of RAM available, run the full pipeline with:
 
 ```r
 # From within RStudio with the project open:
 source("code/run_all.R")
 ```
 
-This executes all pipeline stages in sequence.
+This executes all pipeline stages in sequence and produces a summary report.
 
-### Running Individual Scripts
+### Memory-Constrained Execution (<20 GB RAM)
 
-For debugging or partial runs:
+If RAM is limited, run each script individually and allow R to garbage-collect between stages. This approach reduces peak memory usage by clearing intermediate objects before loading the next stage:
 
 ```r
 # Stage 1: Environment setup and CLIF validation
@@ -232,12 +234,19 @@ source("code/00_setup.R")
 # Stage 2: Cohort construction and outcome derivation
 source("code/01_cohort.R")
 
+# Optional: Clear memory before score calculation
+# rm(list = setdiff(ls(), c("cohort", "cohort_hids", "cohort_jids", "hid_jid_crosswalk", 
+#                           "ward_times", "data_list", "site_lowercase", "req_vitals", "req_labs")))
+# gc()
+
 # Stage 3: Time-varying score calculation
 source("code/02_scores.R")
 
 # Stage 4: Statistical analyses and artifact export
 source("code/03_analysis.R")
 ```
+
+Running scripts sequentially in separate R sessions (restarting R between stages) further reduces peak memory if needed.
 
 ### Expected Runtime
 
@@ -326,8 +335,8 @@ A secondary outcome excludes hospice discharge.
 | `proj_tables/outcome_times.csv` | Outcome timestamps |
 | `proj_tables/careprocess.parquet` | Vasopressor and respiratory support |
 | `proj_tables/hid_jid_crosswalk.parquet` | Hospitalization ID mapping |
-| `proj_output/table_02_cont_<site>.csv` | Continuous variable summaries |
-| `proj_output/table_02_cat_<site>.csv` | Categorical variable summaries |
+| `upload_to_box/table_02_cont_<site>.csv` | Continuous variable summaries |
+| `upload_to_box/table_02_cat_<site>.csv` | Categorical variable summaries |
 
 ---
 
@@ -339,10 +348,10 @@ A secondary outcome excludes hospice discharge.
 
 | Score | Components | Threshold |
 |-------|------------|-----------|
-| **SIRS** | Temperature, heart rate, respiratory rate, WBC | ≥ 2 |
+| **SIRS** | Temperature, heart rate, respiratory rate, WBC, pCO₂ | ≥ 2 |
 | **qSOFA** | Respiratory rate, systolic BP, GCS | ≥ 2 |
-| **MEWS** | Heart rate, respiratory rate, systolic BP, temperature, AVPU | ≥ 5 |
-| **NEWS** | Respiratory rate, SpO₂, supplemental O₂, temperature, systolic BP, heart rate, consciousness | ≥ 5 |
+| **MEWS** | Heart rate, respiratory rate, systolic BP, temperature, GCS | ≥ 5 |
+| **NEWS** | Respiratory rate, SpO₂, supplemental O₂, temperature, systolic BP, heart rate, GCS | ≥ 5 |
 | **MEWS-SF** | MEWS components + SpO₂/FiO₂ ratio | ≥ 7 |
 
 #### Imputation Rules
@@ -357,8 +366,9 @@ A secondary outcome excludes hospice discharge.
 #### FiO₂ Imputation from Flow Rate
 
 ```
+If flow = 0 LPM:  FiO₂ = 0.21
 If flow ≤ 6 LPM:  FiO₂ = 0.21 + (0.04 × flow)
-If flow > 6 LPM:  FiO₂ = 0.21 + (0.04 × 6) + (0.02 × (flow - 6))
+If flow > 6 LPM:  FiO₂ = 0.21 + (0.04 × 6) + (0.03 × (flow - 6))
 Room air:         FiO₂ = 0.21
 ```
 
@@ -402,10 +412,10 @@ FiO₂ values are carried forward up to 6 hours.
 
 | Variant | Description |
 |---------|-------------|
-| `main` | Primary analysis |
+| `main` | Primary analysis (ED admissions only) |
 | `se_fullcode_only` | Restricted to full code status encounters |
-| `se_no_ed_req` | No emergency department requirement |
-| `se_win0_96h` | Expanded 96-hour prediction window |
+| `se_no_ed_req` | No emergency department admission requirement |
+| `se_win0_96h` | Restricted to 0–96 hour window |
 | `se_one_enc_per_pt` | One randomly selected encounter per patient |
 
 **5. Subgroup Analyses**
@@ -419,7 +429,7 @@ FiO₂ values are carried forward up to 6 hours.
 
 **7. Bootstrap Confidence Intervals**
 - Clustered bootstrap (one observation per encounter)
-- 100 iterations with fixed seed
+- 400 iterations with fixed seed
 
 ---
 
@@ -428,53 +438,57 @@ FiO₂ values are carried forward up to 6 hours.
 All outputs follow a standardized naming convention:
 
 ```
-proj_output/<analysis>/<artifact>[_<strata>][_h<hours>][-<variant>]-<site>.csv
+upload_to_box/<analysis>/<artifact>[-<strata>][-h<hours>][-<variant>]-<site>.csv
 ```
 
 ### Directory Structure
 
 ```
-proj_output/
+upload_to_box/
 ├── main/
-│   ├── auroc-ca-<site>.csv           # Site-level AUROCs by cancer status
-│   ├── maxscores-ca-<site>.csv       # Encounter maximum scores
+│   ├── auroc-<site>.csv              # Site-level AUROCs by cancer status
+│   ├── maxscores-<site>.csv          # Encounter maximum scores
 │   └── maxscores-liquid-<site>.csv   # Heme/solid subgroup
 │
 ├── horizon/
-│   ├── counts-ca-h24-<site>.csv      # 24h prediction counts
-│   ├── counts-ca-h12-<site>.csv      # 12h prediction counts
-│   ├── counts-ca-h24-boot-<site>.csv # Bootstrap samples
-│   └── auroc-ca-h24-<site>.csv       # Horizon AUROCs
+│   ├── counts-h24-<site>.csv         # 24h prediction counts
+│   ├── counts-h12-<site>.csv         # 12h prediction counts
+│   ├── counts-h24-boot-<site>.csv    # Bootstrap samples
+│   └── auroc-h24-<site>.csv          # Horizon AUROCs
 │
 ├── threshold/
-│   ├── sesp-ca-<site>.csv            # Sensitivity/specificity
-│   ├── ever-ca-<site>.csv            # Ever-positive analysis
-│   ├── first-ca-<site>.csv           # Time to first positivity
-│   ├── cuminc-ca-<site>.csv          # Cumulative incidence
+│   ├── sesp-<site>.csv               # Sensitivity/specificity
+│   ├── ever-<site>.csv               # Ever-positive analysis
+│   ├── first-<site>.csv              # Time to first positivity
+│   ├── cuminc-<site>.csv             # Cumulative incidence
 │   └── upset-ca-<site>.csv           # Score co-positivity patterns
 │
 ├── sensitivity/
-│   ├── maxscores-ca-se_fullcode_only-<site>.csv
-│   ├── counts-ca-h24-se_no_ed_req-<site>.csv
+│   ├── maxscores-se_fullcode_only-<site>.csv
+│   ├── counts-h24-se_no_ed_req-<site>.csv
 │   └── ...
 │
 ├── meta/
 │   ├── coefficients-<site>.csv       # Regression coefficients
 │   └── score_sds-<site>.csv          # Score standard deviations
 │
-└── diagnostics/
-    ├── overall-<site>.csv            # Cohort-level counts by variant
-    ├── by_cancer-<site>.csv          # Counts by cancer status
-    └── max_scores-<site>.csv         # Score distribution diagnostics
+├── diagnostics/
+│   ├── overall-<site>.csv            # Cohort-level counts by variant
+│   ├── by_cancer-<site>.csv          # Counts by cancer status
+│   └── max_scores-<site>.csv         # Score distribution diagnostics
+│
+├── figure_s01_flow_<site>.csv        # Flow diagram data
+├── table_02_cat_<site>.csv           # Categorical variable summaries
+├── table_02_cont_<site>.csv          # Continuous variable summaries
+├── missing_demog_<site>.csv          # Demographic missingness
+├── missing_vlab_<site>.csv           # Vital/lab missingness
+├── cancer_codes_primary_<site>.csv   # Cancer code frequencies
+└── run_report_<site>.csv             # Pipeline execution summary
 ```
 
 ### Files to Upload
 
-After successful completion, upload the entire `upload_to_box/` directory to the coordinating center. This includes:
-
-- All files from `proj_output/`
-- Flow diagram data (`figure_s01_flow_<site>.csv`)
-- Table 2 summaries
+After successful completion, upload the entire `upload_to_box/` directory to the coordinating center. This includes all analysis artifacts, flow diagram data, and summary tables.
 
 ---
 
@@ -521,7 +535,8 @@ The `collapse_small()` function:
 | Arrow read errors | Missing system libraries | Install Arrow system dependencies or use `file_type: "csv"` |
 | "Sanity check failed" | Outcome rates out of expected range | Review `cohort.parquet` for local coding issues |
 | "Small-cell collapse exceeded 1%" | Too many sparse cells | Review score distributions; consider broader binning |
-| Memory errors | Insufficient RAM | Reduce thread count in `00_setup.R` or process in chunks |
+| Memory errors | Insufficient RAM | Run scripts sequentially with `gc()` between stages, or restart R between scripts |
+| "Cannot find here()" | Project not opened | Open `oncrisk.Rproj` before running scripts |
 
 ### Validation Failures
 
