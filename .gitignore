@@ -4,7 +4,6 @@
 .Rprofile
 .Ruserdata
 .DS_Store
-*.Rproj
 .Rproj.user
 
 ## ignore the renv initialization file
