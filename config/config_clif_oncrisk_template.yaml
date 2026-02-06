@@ -1,0 +1,5 @@
+clif_data_location: "path_to_files"
+project_location: "path_to_folder"
+file_type: "parquet, csv, or fst"
+site_lowercase: "choose from csv in config folder"
+time_zone: "local time zone"
