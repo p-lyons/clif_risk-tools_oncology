@@ -218,7 +218,7 @@ table_cat[, pct := (n / N) * 100]
 
 ### add site counts ------------------------------------------------------------
 
-site_counts = cat_data[var == "female" & category == "1", .(n = sum(n)), by = .(ca_01, site)]
+site_counts = cat_data[var == "female", .(n = sum(n)), by = .(ca_01, site)]
 site_counts = merge(site_counts, overall_n, by = "ca_01")
 site_counts[, pct := (n / N) * 100]
 site_counts[, `:=`(var = "site", category = site)]
