@@ -458,8 +458,8 @@ ever_positive =
 
 all_encs =
   fsubset(cohort, ed_admit_01 == 1) |>
-  ftransform(deadhospice_01 = pmin(dead_01 + hospice_01, 1L)) |>
-  select(joined_hosp_id, ca_01, deadhospice_01)
+  ftransform(o_primary_01 = pmin(wicu_01 + d_noicu_01 + h_noicu_01, 1L)) |>
+  select(joined_hosp_id, ca_01, o_primary_01)
 
 ever_positive_complete =
   tidyr::expand_grid(
@@ -470,11 +470,11 @@ ever_positive_complete =
   join(all_encs,      how = "left", multiple = FALSE) |>
   join(ever_positive, how = "left", multiple = FALSE) |>
   ftransform(ever_positive = as.integer(!is.na(time_to_positive_h))) |>
-  select(joined_hosp_id, score_name, ca_01, ever_positive, deadhospice_01)
+  select(joined_hosp_id, score_name, ca_01, ever_positive, o_primary_01)
 
 # export: ever positive counts
 ever_positive_agg = as.data.table(ever_positive_complete)[
-  , .(n = .N), by = .(score_name, ca_01, ever_positive, deadhospice_01)
+  , .(n = .N), by = .(score_name, ca_01, ever_positive, o_primary_01)
 ][, site := site_lowercase][]
 
 write_artifact(
@@ -489,14 +489,14 @@ write_artifact(
 ever_positive_sesp = as.data.table(ever_positive_complete)[
   , .(
     n_total      = .N,
-    n_outcome    = sum(deadhospice_01 == 1L, na.rm = TRUE),
-    n_no_outcome = sum(deadhospice_01 == 0L, na.rm = TRUE),
+    n_outcome    = sum(o_primary_01 == 1L, na.rm = TRUE),
+    n_no_outcome = sum(o_primary_01 == 0L, na.rm = TRUE),
     n_pos        = sum(ever_positive == 1L, na.rm = TRUE),
     n_neg        = sum(ever_positive == 0L, na.rm = TRUE),
-    tp           = sum(ever_positive == 1L & deadhospice_01 == 1L, na.rm = TRUE),
-    fp           = sum(ever_positive == 1L & deadhospice_01 == 0L, na.rm = TRUE),
-    tn           = sum(ever_positive == 0L & deadhospice_01 == 0L, na.rm = TRUE),
-    fn           = sum(ever_positive == 0L & deadhospice_01 == 1L, na.rm = TRUE)
+    tp           = sum(ever_positive == 1L & o_primary_01 == 1L, na.rm = TRUE),
+    fp           = sum(ever_positive == 1L & o_primary_01 == 0L, na.rm = TRUE),
+    tn           = sum(ever_positive == 0L & o_primary_01 == 0L, na.rm = TRUE),
+    fn           = sum(ever_positive == 0L & o_primary_01 == 1L, na.rm = TRUE)
   ),
   by = .(score_name, ca_01)
 ][, `:=`(
@@ -524,7 +524,7 @@ extract_first_positive = function(scores_dt, score_prefix, threshold_val, score_
   scores_dt |>
     fsubset(get(score_total_col) >= threshold_val & ed_admit_01 == 1) |>
     select(joined_hosp_id, ca_01, o_primary_01, h_from_admit,
-            matches(paste0("^", score_prefix, "_"))) |>
+           matches(paste0("^", score_prefix, "_"))) |>
     select(-matches("_total$")) |>
     roworder(h_from_admit) |>
     fgroup_by(joined_hosp_id) |>
