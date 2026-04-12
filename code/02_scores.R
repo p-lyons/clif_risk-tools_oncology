@@ -1,4 +1,3 @@
-
 # create risk scores by looping over vital sign and lab components
 # process one vital/lab at a time, assign all relevant scores, then combine
 
@@ -408,7 +407,7 @@ locf <- function(df, col, hours, id = "joined_hosp_id", tcol = "time") {
 
 ## run locf: vitals 4h, labs 12h -----------------------------------------------
 
-for (cn in vital_cols) scores = locf(scores, cn, hours = 4)
+for (cn in vital_cols) scores = locf(scores, cn, hours = 6)
 for (cn in lab_cols)   scores = locf(scores, cn, hours = 12)
 
 scores = replace_na(scores, value = 0L, cols = NULL, set = F, type = "const")
@@ -431,6 +430,12 @@ scores[, sirs_total  := rowSums(.SD, na.rm = T), .SDcols = patterns("^sirs_")]
 scores[, mews_total  := rowSums(.SD, na.rm = T), .SDcols = patterns("^mews_")]
 scores[, news_total  := rowSums(.SD, na.rm = T), .SDcols = patterns("^news_")]
 scores[, qsofa_total := rowSums(.SD, na.rm = T), .SDcols = patterns("^qsofa_")]
+
+# NEWS single-parameter rule: positive if any component scores 3
+scores[, news_any3 := as.integer(
+  news_temp == 3L | news_hr == 3L | news_rr == 3L | 
+    news_sbp == 3L | news_spo2 == 3L | news_gcs == 3L
+)]
 
 # scores on the wards only -----------------------------------------------------
 
