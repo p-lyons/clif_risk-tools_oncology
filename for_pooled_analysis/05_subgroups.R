@@ -12,25 +12,18 @@ library(ggplot2)
 
 message("\n== Site-level AUROCs ==")
 
-## calculate AUROC for each site × score × cancer combination ------------------
+## use pre-computed site-level AUROCs from auroc_enc_raw -----------------------
+## these were calculated with proper DeLong CIs at each site in 03_analysis.R
 
-df_main = maxscores_ca_raw[analysis == "main"]
-
-# Expand aggregated data
-df_expanded = df_main[rep(1:.N, times = n), .(site, score_name, ca_01, outcome, max_value)]
-
-# Calculate AUROCs
-site_aurocs = df_expanded[, {
-  roc_obj = roc(outcome, max_value, levels = c(0, 1), direction = "<", ci = TRUE, quiet = TRUE)
-  ci_vals = ci.auc(roc_obj)
-  list(
-    n        = .N,
-    n_events = sum(outcome),
-    auroc    = as.numeric(auc(roc_obj)),
-    ci_lower = as.numeric(ci_vals[1]),
-    ci_upper = as.numeric(ci_vals[3])
-  )
-}, by = .(site, score_name, ca_01)]
+site_aurocs = auroc_enc_raw[analysis == "main", .(
+  site, score_name, ca_01,
+  n        = n_obs,
+  n_events,
+  auroc,
+  auroc_se,
+  ci_lower,
+  ci_upper
+)]
 
 message("  Calculated AUROCs for ", uniqueN(site_aurocs$site), " sites")
 
@@ -71,30 +64,29 @@ site_heterogeneity[, `:=`(
 
 message("  Heterogeneity summary:")
 print(site_heterogeneity[, .(score_lab, ca_lab, mean_auroc = round(mean_auroc, 3), 
-                              sd_auroc = round(sd_auroc, 3), range = round(range, 3))])
+                             sd_auroc = round(sd_auroc, 3), range = round(range, 3))])
 
 # HEMATOLOGIC VS SOLID TUMOR SUBGROUP ------------------------------------------
 
 message("\n== Hematologic vs solid tumor subgroup ==")
 
-if (nrow(maxscores_liquid_raw) > 0) {
+if (nrow(auroc_liquid_enc) > 0) {
   
-  df_liquid = maxscores_liquid_raw
+  ## use pre-computed site-level liquid/solid AUROCs ----------------------------
+  ## meta-analyze across sites for each score × liquid_01 combination
   
-  # Expand and calculate AUROCs
-  df_liquid_exp = df_liquid[rep(1:.N, times = n), .(score_name, liquid_01, outcome, max_value)]
+  liquid_combos = unique(auroc_liquid_enc[, .(score_name, liquid_01)])
   
-  liquid_aurocs = df_liquid_exp[, {
-    roc_obj = roc(outcome, max_value, levels = c(0, 1), direction = "<", ci = TRUE, quiet = TRUE)
-    ci_vals = ci.auc(roc_obj)
-    list(
-      n        = .N,
-      n_events = sum(outcome),
-      auroc    = as.numeric(auc(roc_obj)),
-      ci_lower = as.numeric(ci_vals[1]),
-      ci_upper = as.numeric(ci_vals[3])
-    )
-  }, by = .(score_name, liquid_01)]
+  liquid_meta_list = lapply(seq_len(nrow(liquid_combos)), function(i) {
+    sub = auroc_liquid_enc[
+      score_name == liquid_combos$score_name[i] & 
+        liquid_01  == liquid_combos$liquid_01[i]
+    ]
+    ma = meta_analyze_aurocs(sub)
+    ma[, `:=`(score_name = liquid_combos$score_name[i], liquid_01 = liquid_combos$liquid_01[i])]
+  })
+  
+  liquid_aurocs = rbindlist(liquid_meta_list, use.names = TRUE, fill = TRUE)
   
   liquid_aurocs[, `:=`(
     cancer_type = fifelse(liquid_01 == 1, "Hematologic", "Solid"),
@@ -105,23 +97,21 @@ if (nrow(maxscores_liquid_raw) > 0) {
   print(liquid_aurocs[, .(score_lab, cancer_type, auroc = round(auroc, 3), 
                           ci = paste0("(", round(ci_lower, 3), "-", round(ci_upper, 3), ")"))])
   
-  ## DeLong comparison between liquid and solid --------------------------------
+  ## z-test comparison between liquid and solid --------------------------------
   
-  liquid_delong = df_liquid_exp[, {
-    if (sum(liquid_01 == 0) > 0 & sum(liquid_01 == 1) > 0 &
-        length(unique(outcome[liquid_01 == 0])) == 2 &
-        length(unique(outcome[liquid_01 == 1])) == 2) {
-      
-      roc_solid  = roc(outcome[liquid_01 == 0], max_value[liquid_01 == 0], quiet = TRUE)
-      roc_liquid = roc(outcome[liquid_01 == 1], max_value[liquid_01 == 1], quiet = TRUE)
-      tst        = roc.test(roc_solid, roc_liquid, method = "delong", paired = FALSE)
-      
-      list(
-        auroc_solid   = as.numeric(auc(roc_solid)),
-        auroc_liquid  = as.numeric(auc(roc_liquid)),
-        diff_auc      = as.numeric(auc(roc_liquid) - auc(roc_solid)),
-        p_delong      = unname(tst$p.value)
-      )
+  liquid_delong = liquid_aurocs[, {
+    auc_s  = auroc[liquid_01 == 0]
+    auc_l  = auroc[liquid_01 == 1]
+    se_s   = auroc_se[liquid_01 == 0]
+    se_l   = auroc_se[liquid_01 == 1]
+    
+    if (length(auc_s) == 1 && length(auc_l) == 1 &&
+        !is.na(auc_s) && !is.na(auc_l) && !is.na(se_s) && !is.na(se_l)) {
+      diff   = auc_l - auc_s
+      se_d   = sqrt(se_s^2 + se_l^2)
+      z      = diff / se_d
+      p      = 2 * pnorm(-abs(z))
+      list(auroc_solid = auc_s, auroc_liquid = auc_l, diff_auc = diff, p_delong = p)
     } else {
       list(auroc_solid = NA_real_, auroc_liquid = NA_real_, 
            diff_auc = NA_real_, p_delong = NA_real_)
@@ -130,9 +120,13 @@ if (nrow(maxscores_liquid_raw) > 0) {
   
   liquid_delong[, score_lab := factor(score_name, levels = names(SCORE_LABS), labels = SCORE_LABS)]
   
-  message("  DeLong comparison (liquid - solid):")
+  message("  Liquid vs solid comparison (z-test on meta-analyzed AUROCs):")
   print(liquid_delong[, .(score_lab, diff_auc = round(diff_auc, 3), p_delong = round(p_delong, 4))])
   
+} else if (nrow(maxscores_liquid_raw) > 0) {
+  message("  WARNING: No site-level liquid AUROCs; skipping subgroup")
+  liquid_aurocs = data.table()
+  liquid_delong = data.table()
 } else {
   message("  WARNING: No liquid/solid data available")
   liquid_aurocs = data.table()
@@ -143,32 +137,29 @@ if (nrow(maxscores_liquid_raw) > 0) {
 
 message("\n== 24-hour AUROCs by cancer type ==")
 
-if (nrow(counts_liquid_raw) > 0) {
+if (nrow(auroc_liquid_h24) > 0) {
   
-  df_liquid_24h = counts_liquid_raw
-  df_liquid_24h[, score_name := str_remove(score_name, "_total")]
+  ## meta-analyze site-level 24h liquid/solid AUROCs ---------------------------
   
-  # Expand and calculate
-  df_liq24_exp = df_liquid_24h[rep(1:.N, times = n), .(score_name, liquid_01, outcome, value)]
+  liq24_combos = unique(auroc_liquid_h24[, .(score_name, liquid_01)])
   
-  liquid_aurocs_24h = df_liq24_exp[, {
-    roc_obj = roc(outcome, value, levels = c(0, 1), direction = "<", ci = TRUE, quiet = TRUE)
-    ci_vals = ci.auc(roc_obj)
-    list(
-      n        = .N,
-      n_events = sum(outcome),
-      auroc    = as.numeric(auc(roc_obj)),
-      ci_lower = as.numeric(ci_vals[1]),
-      ci_upper = as.numeric(ci_vals[3])
-    )
-  }, by = .(score_name, liquid_01)]
+  liq24_meta_list = lapply(seq_len(nrow(liq24_combos)), function(i) {
+    sub = auroc_liquid_h24[
+      score_name == liq24_combos$score_name[i] & 
+        liquid_01  == liq24_combos$liquid_01[i]
+    ]
+    ma = meta_analyze_aurocs(sub)
+    ma[, `:=`(score_name = liq24_combos$score_name[i], liquid_01 = liq24_combos$liquid_01[i])]
+  })
+  
+  liquid_aurocs_24h = rbindlist(liq24_meta_list, use.names = TRUE, fill = TRUE)
   
   liquid_aurocs_24h[, `:=`(
     cancer_type = fifelse(liquid_01 == 1, "Hematologic", "Solid"),
     score_lab   = factor(score_name, levels = names(SCORE_LABS), labels = SCORE_LABS)
   )]
   
-  message("  24h horizon by cancer type calculated")
+  message("  24h horizon by cancer type calculated (meta-analyzed)")
   
 } else {
   liquid_aurocs_24h = data.table()
