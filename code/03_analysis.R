@@ -218,6 +218,8 @@ materialize_variant_long = function(variant, scores_long_base, scores, fc) {
     },
     se_win0_96h = {
       dt = dt[ed_admit_01 == 1L & h_from_admit >= 0 & h_from_admit <= 96]
+      # censor outcomes that occur beyond 96h from admission
+      dt[!is.na(h_to_event) & (h_from_admit + h_to_event) > 96, h_to_event := NA_real_]
     },
     se_one_enc_per_pt = {
       enc_tbl   = funique(select(scores, joined_hosp_id, patient_id, ed_admit_01))
@@ -249,8 +251,11 @@ materialize_variant_max = function(variant, scores, cohort, fc) {
       fsubset(scores, ed_admit_01 == 1L & joined_hosp_id %in% fc_encs)
     },
     se_win0_96h = {
-      # KEY FIX: filter to 0-96h BEFORE taking max
-      fsubset(scores, ed_admit_01 == 1L & h_from_admit >= 0 & h_from_admit <= 96)
+      # filter scores to 0-96h AND censor outcomes beyond 96h from ward admission
+      dt = fsubset(scores, ed_admit_01 == 1L & h_from_admit >= 0 & h_from_admit <= 96)
+      h_outcome = as.numeric(difftime(dt$outcome_dttm, dt$in_dttm, units = "hours"))
+      dt$o_primary_01 = fifelse(!is.na(h_outcome) & h_outcome <= 96, dt$o_primary_01, 0L)
+      dt
     },
     se_one_enc_per_pt = {
       enc_tbl   = funique(select(scores, joined_hosp_id, patient_id, ed_admit_01))
@@ -269,17 +274,18 @@ materialize_variant_max = function(variant, scores, cohort, fc) {
   # calculate max scores per encounter
   dt_max = fgroup_by(dt_scores, joined_hosp_id) |>
     fsummarize(
-      patient_id  = ffirst(patient_id),
-      hospital_id = ffirst(hospital_id),
-      ca_01       = ffirst(ca_01),
-      ed_admit_01 = ffirst(ed_admit_01),
-      fullcode_01 = fifelse(ffirst(joined_hosp_id) %in% fc, 1L, 0L),
-      sirs_max    = fmax(sirs_total,    na.rm = TRUE),
-      qsofa_max   = fmax(qsofa_total,   na.rm = TRUE),
-      mews_max    = fmax(mews_total,    na.rm = TRUE),
-      news_max    = fmax(news_total,    na.rm = TRUE),
-      mews_sf_max = fmax(mews_sf_total, na.rm = TRUE),
-      outcome     = ffirst(o_primary_01)
+      patient_id      = ffirst(patient_id),
+      hospital_id     = ffirst(hospital_id),
+      ca_01           = ffirst(ca_01),
+      ed_admit_01     = ffirst(ed_admit_01),
+      fullcode_01     = fifelse(ffirst(joined_hosp_id) %in% fc, 1L, 0L),
+      sirs_max        = fmax(sirs_total,    na.rm = TRUE),
+      qsofa_max       = fmax(qsofa_total,   na.rm = TRUE),
+      mews_max        = fmax(mews_total,    na.rm = TRUE),
+      news_max        = fmax(news_total,    na.rm = TRUE),
+      mews_sf_max     = fmax(mews_sf_total, na.rm = TRUE),
+      enc_news_any3   = fmax(news_any3,     na.rm = TRUE),
+      outcome         = ffirst(o_primary_01)
     ) |>
     pivot_longer(
       cols      = ends_with("_max"),
@@ -290,6 +296,7 @@ materialize_variant_max = function(variant, scores, cohort, fc) {
   
   # handle -Inf from fmax on empty sets
   dt_max[is.infinite(max_value), max_value := NA_integer_]
+  dt_max[is.infinite(enc_news_any3), enc_news_any3 := 0L]
   
   as.data.table(dt_max)[]
 }
@@ -322,21 +329,43 @@ run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 400L) 
   set.seed(2025L)
   boot_list = vector("list", B)
   base_dt   = dt[, .(joined_hosp_id, score_name, ca_01, value, h_to_event)]
-  setkey(base_dt, joined_hosp_id)
+  
+  enc_ids = unique(base_dt$joined_hosp_id)
+  n_enc   = length(enc_ids)
+  
+  # pre-compute outcomes for each horizon
+  for (HH in horizons) {
+    col = paste0("y_", HH)
+    base_dt[, (col) := make_y(h_to_event, HH)]
+  }
+  
+  # pre-sample 1 random obs per encounter × score (done ONCE, not per iteration)
+  # the bootstrap variance comes from which encounters are included, not which
+  # obs within an encounter is selected — this is a trivial second-order effect
+  compact = base_dt[, .SD[sample(.N, 1L)], by = .(joined_hosp_id, score_name)]
+  setkey(compact, joined_hosp_id)
   
   for (b in seq_len(B)) {
-    idx  = sample_one_idx(base_dt)
-    samp = base_dt[idx]
+    
+    # cluster bootstrap: resample encounters with replacement → frequency table
+    boot_encs = data.table(joined_hosp_id = sample(enc_ids, n_enc, replace = TRUE))
+    enc_freq  = boot_encs[, .(weight = .N), by = joined_hosp_id]
+    
+    # join weights onto pre-sampled compact table (fast keyed join)
+    samp = compact[enc_freq, nomatch = NULL, on = "joined_hosp_id"]
     
     counts_b = rbindlist(lapply(horizons, function(HH) {
-      samp[, outcome := make_y(h_to_event, HH)]
-      samp[, .(n = .N), by = .(score_name, ca_01, value, outcome)
+      col = paste0("y_", HH)
+      samp[, .(n = sum(weight)), by = .(score_name, ca_01, value, outcome = get(col))
       ][, `:=`(site = site_lowercase, h = HH, iter = b)]
     }), use.names = TRUE)
     
     boot_list[[b]] = counts_b
     if (b %% 25 == 0) message("    Bootstrap iteration ", b, "/", B)
   }
+  
+  # clean up pre-computed columns
+  for (HH in horizons) base_dt[, (paste0("y_", HH)) := NULL]
   
   rbindlist(boot_list, use.names = TRUE)[]
 }
@@ -385,15 +414,29 @@ fit_one_score = function(df, score, outcome_col = "outcome", cancer_col = "ca_01
   est = co[int_rows, "Estimate"]
   se  = co[int_rows, "Std. Error"]
   
+  # extract all fixed-effect coefficients for slope visualization
+  beta_intercept = co["(Intercept)", "Estimate"]
+  beta_score     = co[max_value_col, "Estimate"]
+  beta_cancer    = co[cancer_col, "Estimate"]
+  se_intercept   = co["(Intercept)", "Std. Error"]
+  se_score       = co[max_value_col, "Std. Error"]
+  se_cancer      = co[cancer_col, "Std. Error"]
+  
   tidytable(
-    score       = score,
-    beta_int    = est,
-    se_int      = se,
-    site_n      = nobs(fit),
-    n_events    = fsum(df_sub[[outcome_col]] == 1L, na.rm = TRUE),
-    n_hospitals = fnunique(df_sub[[hosp_col]]),
-    converged   = isTRUE(fit$fit$convergence == 0),
-    hess_pd     = !any(is.na(se))
+    score          = score,
+    beta_int       = est,
+    se_int         = se,
+    beta_intercept = beta_intercept,
+    se_intercept   = se_intercept,
+    beta_score     = beta_score,
+    se_score       = se_score,
+    beta_cancer    = beta_cancer,
+    se_cancer      = se_cancer,
+    site_n         = nobs(fit),
+    n_events       = fsum(df_sub[[outcome_col]] == 1L, na.rm = TRUE),
+    n_hospitals    = fnunique(df_sub[[hosp_col]]),
+    converged      = isTRUE(fit$fit$convergence == 0),
+    hess_pd        = !any(is.na(se))
   )
 }
 
@@ -455,6 +498,29 @@ ever_positive =
     time_to_positive_h = ffirst(h_from_admit),
     first_positive_val = ffirst(value)
   )
+
+# NEWS single-parameter rule: also positive if any component scores 3
+news_any3_pos =
+  fsubset(scores, ed_admit_01 == 1 & news_any3 == 1L) |>
+  roworder(time) |>
+  fgroup_by(joined_hosp_id) |>
+  fsummarize(
+    time_to_positive_h = ffirst(h_from_admit),
+    first_positive_val = ffirst(news_total)
+  ) |>
+  ftransform(score_name = "news_total")
+
+# combine and keep earliest positive per encounter × score
+ever_positive = 
+  rowbind(ever_positive, news_any3_pos) |>
+  roworder(time_to_positive_h) |>
+  fgroup_by(joined_hosp_id, score_name) |>
+  fsummarize(
+    time_to_positive_h = ffirst(time_to_positive_h),
+    first_positive_val = ffirst(first_positive_val)
+  )
+
+rm(news_any3_pos)
 
 all_encs =
   fsubset(cohort, ed_admit_01 == 1) |>
@@ -542,7 +608,24 @@ extract_first_positive = function(scores_dt, score_prefix, threshold_val, score_
 first_sirs   = extract_first_positive(scores, "sirs",  2L, "sirs_total")
 first_qsofa  = extract_first_positive(scores, "qsofa", 2L, "qsofa_total")
 first_mews   = extract_first_positive(scores, "mews",  5L, "mews_total")
-first_news   = extract_first_positive(scores, "news",  7L, "news_total")
+# NEWS: positive if score >= 5 OR any single parameter scores 3
+first_news =
+  scores |>
+  fsubset((news_total >= 5L | news_any3 == 1L) & ed_admit_01 == 1) |>
+  select(joined_hosp_id, ca_01, o_primary_01, h_from_admit,
+         matches("^news_")) |>
+  select(-matches("_total$"), -news_any3) |>
+  roworder(h_from_admit) |>
+  fgroup_by(joined_hosp_id) |>
+  ffirst() |>
+  pivot_longer(
+    cols         = matches("^news_"),
+    names_to     = "component",
+    values_to    = "value",
+    names_prefix = "news_"
+  ) |>
+  ftransform(score = "news") |>
+  fsubset(value > 0)
 
 # mews_sf needs special handling for the sf column
 first_mewssf =
@@ -742,20 +825,22 @@ for (v in VARIANTS) {
     )
   }
   
-  # bootstrap counts
-  message("  Computing bootstrap counts...")
-  counts_boot = run_horizon_counts_bootstrap(dt_long, HORIZONS, site_lowercase, B = 400L)
-  
-  for (HH in HORIZONS) {
-    write_artifact(
-      df       = counts_boot[h == HH],
-      analysis = if (v == "main") "horizon" else "sensitivity",
-      artifact = "counts",
-      site     = site_lowercase,
-      strata   = "ca",
-      horizon  = HH,
-      variant  = if (v == "main") "boot" else paste0(v, "-boot")
-    )
+  # bootstrap counts (main variant only — addresses unequal observation time)
+  if (v == "main") {
+    message("  Computing bootstrap counts...")
+    counts_boot = run_horizon_counts_bootstrap(dt_long, HORIZONS, site_lowercase, B = 400L)
+    
+    for (HH in HORIZONS) {
+      write_artifact(
+        df       = counts_boot[h == HH],
+        analysis = "horizon",
+        artifact = "counts",
+        site     = site_lowercase,
+        strata   = "ca",
+        horizon  = HH,
+        variant  = "boot"
+      )
+    }
   }
   
   # --- encounter-level max scores ---------------------------------------------
@@ -1066,7 +1151,11 @@ THRESHOLDS_short[, score_name := str_remove(score_name, "_total")]
 upset_enc =
   fsubset(dt_max_main, ed_admit_01 == 1) |>
   join(THRESHOLDS_short, how = "left", multiple = TRUE) |>
-  ftransform(positive = fifelse(max_value >= threshold, 1L, 0L)) |>
+  ftransform(positive = fifelse(
+    score_name == "news",
+    fifelse(max_value >= threshold | enc_news_any3 == 1L, 1L, 0L),
+    fifelse(max_value >= threshold, 1L, 0L)
+  )) |>
   select(joined_hosp_id, ca_01, outcome, score_name, positive) |>
   pivot_wider(names_from = score_name, values_from = positive)
 
@@ -1090,7 +1179,7 @@ write_artifact(
 
 message("\n== Complete ==")
 
-rm(dt_long, dt_max, dt_max_main, dt_max_liquid, counts, counts_boot)
+suppressWarnings(rm(dt_long, dt_max, dt_max_main, dt_max_liquid, counts, counts_boot))
 rm(scores_long_base, scores_long_cancer, cuminc_data)
 gc()
 
