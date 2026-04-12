@@ -89,23 +89,16 @@ message("\n== Calculating odds ratios ==")
 
 meta_results = merge(meta_results, pooled_sds, by = "score")
 
-## per-point equivalence bounds (prespecified: OR 0.98-1.02) -------------------
-
-eq_lo_pt = log(0.98)
-eq_hi_pt = log(1.02)
-
 meta_results[, `:=`(
   # Per-point ORs
   pooled_or     = exp(pooled_beta),
   or_ci_lower   = exp(pooled_ci_lower),
   or_ci_upper   = exp(pooled_ci_upper),
   or_pred_lower = exp(pred_lower),
-  or_pred_upper = exp(pred_upper),
-  # Equivalence test (per point)
-  equivalent_pt = (pooled_ci_lower > eq_lo_pt & pooled_ci_upper < eq_hi_pt)
+  or_pred_upper = exp(pred_upper)
 )]
 
-## per-SD translations (secondary) ---------------------------------------------
+## per-SD translations ---------------------------------------------------------
 
 meta_results[, `:=`(
   beta_per_sd     = pooled_beta * pooled_sd,
@@ -114,10 +107,11 @@ meta_results[, `:=`(
   or_per_sd_upper = exp(pooled_ci_upper * pooled_sd)
 )]
 
-# Per-SD equivalence (0.95-1.05)
+## prespecified equivalence band: OR per 1-SD within [0.95, 1.05] --------------
+
 eq_lo_sd = 0.95
 eq_hi_sd = 1.05
-meta_results[, equivalent_per_sd := (or_per_sd_lower > eq_lo_sd & or_per_sd_upper < eq_hi_sd)]
+meta_results[, equivalent := (or_per_sd_lower > eq_lo_sd & or_per_sd_upper < eq_hi_sd)]
 
 # FORMAT RESULTS TABLE ---------------------------------------------------------
 
@@ -133,8 +127,7 @@ meta_table = meta_results[, .(
   `P-value (KH)`          = fifelse(pooled_p < 0.001, "<0.001", sprintf("%.3f", pooled_p)),
   `τ²`                    = round(tau2, 4),
   `I²`                    = sprintf("%.1f%%", I2),
-  `Equivalent (per pt)?`  = fifelse(equivalent_pt, "Yes", "No"),
-  `Equivalent (per SD)?`  = fifelse(equivalent_per_sd, "Yes", "No")
+  `Equivalent (per SD)?`  = fifelse(equivalent, "Yes", "No")
 )]
 
 print(meta_table)
@@ -188,39 +181,87 @@ forest_data[, is_pooled := site == "Pooled"]
 
 message("\n== Preparing slope comparison data ==")
 
-# Load maxscores for slope visualization
-score_data = maxscores_ca_raw[analysis == "main"]
+# Use meta-analyzed coefficients for prediction curves when available
+# Falls back to naive pooled glm if site-level coefficients are not exported
 
-if (nrow(score_data) > 0) {
+has_full_coefs = all(c("beta_intercept", "beta_score", "beta_cancer") %in% names(coef_data))
+
+if (has_full_coefs && nrow(coef_data) > 0) {
   
-  score_list    = unique(score_data$score_name)
-  model_results = list()
-  pred_results  = list()
+  message("  Using meta-analyzed coefficients for slope visualization")
+  
+  score_list   = unique(coef_data$score)
+  pred_results = list()
+  
+  for (s in score_list) {
+    
+    s_coefs = coef_data[score == s]
+    
+    # meta-analyze each coefficient across sites
+    ma_intercept = tryCatch(
+      rma(yi = s_coefs$beta_intercept, sei = s_coefs$se_intercept, method = "REML"),
+      error = function(e) NULL
+    )
+    ma_score = tryCatch(
+      rma(yi = s_coefs$beta_score, sei = s_coefs$se_score, method = "REML"),
+      error = function(e) NULL
+    )
+    ma_cancer = tryCatch(
+      rma(yi = s_coefs$beta_cancer, sei = s_coefs$se_cancer, method = "REML"),
+      error = function(e) NULL
+    )
+    
+    if (is.null(ma_intercept) || is.null(ma_score) || is.null(ma_cancer)) next
+    
+    b0  = as.numeric(ma_intercept$beta)
+    b_s = as.numeric(ma_score$beta)
+    b_c = as.numeric(ma_cancer$beta)
+    b_i = meta_results[score == s]$pooled_beta
+    
+    # use maxscores to determine score range
+    score_data_s = maxscores_ca_raw[analysis == "main" & score_name == s]
+    score_range  = seq(min(score_data_s$max_value), max(score_data_s$max_value), by = 0.5)
+    
+    pred_no_ca = plogis(b0 + b_s * score_range)
+    pred_ca    = plogis(b0 + b_c + (b_s + b_i) * score_range)
+    
+    pred_results[[s]] = data.table(
+      score          = s,
+      score_value    = rep(score_range, 2),
+      cancer_status  = rep(c("Non-cancer", "Cancer"), each = length(score_range)),
+      predicted_prob = c(pred_no_ca, pred_ca)
+    )
+  }
+  
+  all_preds = rbindlist(pred_results)
+  
+  # add interaction OR from meta-analysis for labeling
+  all_preds = merge(
+    all_preds,
+    meta_results[, .(score, or_interaction = pooled_or)],
+    by = "score"
+  )
+  all_preds[, score_label := sprintf("%s\nInteraction OR = %.3f", toupper(score), or_interaction)]
+  
+} else if (nrow(maxscores_ca_raw[analysis == "main"]) > 0) {
+  
+  message("  Full coefficients not available; falling back to pooled glm for visualization")
+  
+  score_data   = maxscores_ca_raw[analysis == "main"]
+  score_list   = unique(score_data$score_name)
+  pred_results = list()
   
   for (s in score_list) {
     
     s_data = score_data[score_name == s]
     s_data[, score_x_cancer := max_value * ca_01]
     
-    # Fit pooled model
-    mod = glm(
+    mod   = glm(
       cbind(outcome, n - outcome) ~ ca_01 + max_value + score_x_cancer,
-      data   = s_data,
-      family = binomial()
+      data = s_data, family = binomial()
     )
-    
     coefs = coef(mod)
     
-    model_results[[s]] = data.table(
-      score            = s,
-      beta_int         = coefs["(Intercept)"],
-      beta_cancer      = coefs["ca_01"],
-      beta_score       = coefs["max_value"],
-      beta_interaction = coefs["score_x_cancer"],
-      or_interaction   = exp(coefs["score_x_cancer"])
-    )
-    
-    # Generate predictions
     score_range = seq(min(s_data$max_value), max(s_data$max_value), by = 0.5)
     
     pred_no_ca = plogis(coefs["(Intercept)"] + coefs["max_value"] * score_range)
@@ -235,17 +276,17 @@ if (nrow(score_data) > 0) {
     )
   }
   
-  all_models = rbindlist(model_results)
-  all_preds  = rbindlist(pred_results)
-  
-  # Add interaction OR to predictions for labeling
-  all_preds = merge(all_preds, all_models[, .(score, or_interaction)], by = "score")
+  all_preds = rbindlist(pred_results)
+  all_preds = merge(
+    all_preds,
+    meta_results[, .(score, or_interaction = pooled_or)],
+    by = "score"
+  )
   all_preds[, score_label := sprintf("%s\nInteraction OR = %.3f", toupper(score), or_interaction)]
   
 } else {
-  message("  WARNING: No maxscores data for slope plots")
-  all_models = data.table()
-  all_preds  = data.table()
+  message("  WARNING: No data for slope plots")
+  all_preds = data.table()
 }
 
 # EXPORTS ----------------------------------------------------------------------
