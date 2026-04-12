@@ -68,15 +68,15 @@ message("\n== Ever positive analysis ==")
 
 ## aggregate across sites ------------------------------------------------------
 
-ever_pos = ever_positive_raw[, .(n = sum(n)), by = .(score_name, ca_01, ever_positive, deadhospice_01)]
+ever_pos = ever_positive_raw[, .(n = sum(n)), by = .(score_name, ca_01, ever_positive, o_primary_01)]
 
 ## calculate rates by group ----------------------------------------------------
 
 ever_pos_summary = ever_pos[, .(
   n_total        = sum(n),
   n_ever_pos     = sum(n[ever_positive == 1]),
-  n_with_outcome = sum(n[deadhospice_01 == 1]),
-  n_pos_outcome  = sum(n[ever_positive == 1 & deadhospice_01 == 1])
+  n_with_outcome = sum(n[o_primary_01 == 1]),
+  n_pos_outcome  = sum(n[ever_positive == 1 & o_primary_01 == 1])
 ), by = .(score_name, ca_01)]
 
 ever_pos_summary[, `:=`(
