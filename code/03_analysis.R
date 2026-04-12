@@ -247,7 +247,7 @@ materialize_variant_max = function(variant, scores, cohort, fc) {
       copy(scores)
     },
     se_fullcode_only = {
-      fc_encs = fsubset(cohort, tolower(initial_code_status) == "full")$joined_hosp_id
+      fc_encs = fsubset(cohort, tolower(initial_code_status) %in% c("full", "presume_full"))$joined_hosp_id
       fsubset(scores, ed_admit_01 == 1L & joined_hosp_id %in% fc_encs)
     },
     se_win0_96h = {
