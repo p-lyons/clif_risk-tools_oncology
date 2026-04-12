@@ -1,3 +1,4 @@
+
 # 01_tables.R
 # Table 1 (flow), Table 2 (characteristics), Table 3 (outcomes)
 
@@ -258,7 +259,7 @@ var_labels = data.table(
     "female", "race_category", "ethnicity_category",
     "site",
     "los", "wicu", "va", "imv",
-    "dead", "hospice", "dead_or_hospice"
+    "dead", "hospice", "d_noicu", "h_noicu"
   ),
   label = c(
     "N", "Age, years, mean (SD)", "Van Walraven score, mean (SD)", "Admission code status, n (%)",
@@ -266,7 +267,8 @@ var_labels = data.table(
     "Site, n (%)",
     "Length of stay, n (%)", "Ward-ICU transfer, n (%)",
     "Vasoactive medications, n (%)", "Invasive mechanical ventilation, n (%)",
-    "Died in hospital, n (%)", "Discharged to hospice, n (%)", "Died or discharged to hospice, n (%)"
+    "Died in hospital, n (%)", "Discharged to hospice, n (%)",
+    "Ward death, n (%)", "Ward hospice discharge, n (%)"
   )
 )
 
@@ -300,7 +302,6 @@ all_data    = rbindlist(list(all_data, header_rows), fill = TRUE)
 
 all_data[, display := fcase(
   var %in% binary_vars & category == "1",       label,
-  var == "dead_or_hospice",                     label,
   var %in% categorical_vars & is.na(category),  label,
   var %in% c("N", "age", "vw"),                 label,
   !is.na(category) & category != "",            paste0("  ", category),
@@ -342,29 +343,43 @@ save_as_docx(ft2, path = here("output", "tables", paste0("table2_characteristics
 
 message("\n== Creating Table 3: Outcomes ==")
 
-## create combined death/hospice variable --------------------------------------
+## primary composite from maxscores (ward death | ward hospice | ICU transfer) -
 
-death_hospice = table_cat[var %in% c("dead", "hospice") & category == "1", 
-                          .(n = sum(n)), by = .(ca_01, N)]
-death_hospice[, pct := (n / N) * 100]
-death_hospice[, formatted := paste0(format_n(n), " (", round(pct, 1), "%)")]
-death_hospice[, prop := n / N]
+# use a single score to avoid double-counting encounters
+composite_score = maxscores_ca_raw[analysis == "main" & score_name == "sirs"]
 
-dh_smd = death_hospice[, .(p0 = prop[ca_01 == 0], p1 = prop[ca_01 == 1])]
-dh_smd[, smd := abs(p1 - p0) / sqrt((p0 * (1 - p0) + p1 * (1 - p1)) / 2)]
+composite_counts = composite_score[, .(
+  n_events = sum(n[outcome == 1]),
+  N        = sum(n)
+), by = ca_01]
 
-dh_row = dcast(death_hospice, . ~ ca_01, value.var = "formatted")
-dh_row[, `:=`(var = "dead_or_hospice", category = "1", SMD = round(dh_smd$smd, 3))]
-dh_row[, . := NULL]
-setcolorder(dh_row, c("var", "category", "0", "1", "SMD"))
-setnames(dh_row, c("0", "1"), c("No Cancer", "Cancer"))
+# sanity check: maxscores N should match table_cat N
+# stopifnot(all.equal(
+#   composite_counts[order(ca_01)]$N,
+#   overall_n[order(ca_01)]$N
+# ))
 
-cat_wide = rbindlist(list(cat_wide, dh_row), use.names = TRUE)
+composite_counts = merge(composite_counts[, .(ca_01, n_events)], overall_n, by = "ca_01")
+
+composite_counts[, pct  := (n_events / N) * 100]
+composite_counts[, prop := n_events / N]
+composite_counts[, formatted := paste0(format_n(n_events), " (", round(pct, 1), "%)")]
+
+composite_smd_vals = composite_counts[, .(p0 = prop[ca_01 == 0], p1 = prop[ca_01 == 1])]
+composite_smd_vals[, smd := abs(p1 - p0) / sqrt((p0 * (1 - p0) + p1 * (1 - p1)) / 2)]
+
+composite_row = dcast(composite_counts, . ~ ca_01, value.var = "formatted")
+composite_row[, `:=`(var = "composite", category = "1", SMD = round(composite_smd_vals$smd, 3))]
+composite_row[, . := NULL]
+setcolorder(composite_row, c("var", "category", "0", "1", "SMD"))
+setnames(composite_row, c("0", "1"), c("No Cancer", "Cancer"))
+
+cat_wide = rbindlist(list(cat_wide, composite_row), use.names = TRUE)
 
 ## chi-square tests ------------------------------------------------------------
 
-outcome_vars     = c("dead_or_hospice", "dead", "hospice", "icu", "va", "imv", "los")
-outcome_cat_data = table_cat[var %in% c("dead", "hospice", "icu", "va", "imv", "los")]
+outcome_vars     = c("composite", "d_noicu", "h_noicu", "wicu", "dead", "hospice", "va", "imv", "los")
+outcome_cat_data = table_cat[var %in% c("d_noicu", "h_noicu", "wicu", "dead", "hospice", "va", "imv", "los")]
 
 chi_results = outcome_cat_data[, {
   tab        = dcast(.SD, category ~ ca_01, value.var = "n")
@@ -373,15 +388,15 @@ chi_results = outcome_cat_data[, {
   .(p_value  = test$p.value)
 }, by = var]
 
-# death/hospice chi-square
-dh_tab    = death_hospice[, .(category = "1", n), keyby = .(ca_01)]
-dh_matrix = matrix(c(dh_tab$n, overall_n$N - dh_tab$n), nrow = 2)
-dh_pval   = suppressWarnings(chisq.test(dh_matrix))$p.value
-chi_results = rbindlist(list(data.table(var = "dead_or_hospice", p_value = dh_pval), chi_results))
+# composite chi-square
+comp_tab    = composite_counts[, .(ca_01, n = n_events, N)]
+comp_matrix = matrix(c(comp_tab$n, comp_tab$N - comp_tab$n), nrow = 2)
+comp_pval   = suppressWarnings(chisq.test(comp_matrix))$p.value
+chi_results = rbindlist(list(data.table(var = "composite", p_value = comp_pval), chi_results))
 
 ## risk differences ------------------------------------------------------------
 
-binary_outcomes = c("dead", "hospice", "icu", "va", "imv", "dead_or_hospice")
+binary_outcomes = c("d_noicu", "h_noicu", "wicu", "dead", "hospice", "va", "imv")
 
 rd_results = table_cat[var %in% binary_outcomes & category == "1", {
   prop_0 = n[ca_01 == 0] / N[ca_01 == 0]
@@ -390,14 +405,15 @@ rd_results = table_cat[var %in% binary_outcomes & category == "1", {
   .(rd = rd)
 }, by = var]
 
-dh_rd = death_hospice[, {
+# composite RD
+comp_rd = composite_counts[, {
   prop_0 = prop[ca_01 == 0]
   prop_1 = prop[ca_01 == 1]
   rd     = (prop_1 - prop_0) * 100
-  .(var = "dead_or_hospice", rd = rd)
+  .(var = "composite", rd = rd)
 }]
 
-rd_results = rbindlist(list(rd_results, dh_rd))
+rd_results = rbindlist(list(rd_results, comp_rd))
 
 # LOS risk differences
 los_rd = table_cat[var == "los", {
@@ -412,19 +428,22 @@ rd_all = rbindlist(list(rd_results[, category := "1"], los_rd), fill = TRUE)
 ## build Table 3 ---------------------------------------------------------------
 
 var_labels_t3 = data.table(
-  var   = c("dead_or_hospice", "dead", "hospice", "icu", "va", "imv", "los"),
+  var   = c("composite", "d_noicu", "h_noicu", "wicu",
+            "dead", "hospice", "va", "imv", "los"),
   label = c(
-    "Died or discharged to hospice, n (%)",
-    "Died in hospital, n (%)",
-    "Discharged to hospice, n (%)",
-    "ICU admission, n (%)",
+    "Primary composite outcome, n (%)",
+    "  Ward death, n (%)",
+    "  Ward hospice discharge, n (%)",
+    "  Ward-to-ICU transfer, n (%)",
+    "Overall hospital mortality, n (%)",
+    "Overall hospice discharge, n (%)",
     "Vasoactive medications, n (%)",
     "Invasive mechanical ventilation, n (%)",
     "Length of stay, n (%)"
   )
 )
 
-# Rebuild all_data with death/hospice
+# Rebuild all_data with composite
 all_data = rbindlist(list(n_row, cont_wide, cat_wide), fill = TRUE)
 all_data = merge(all_data, var_labels, by = "var", all.x = TRUE)
 
@@ -440,20 +459,23 @@ table3 = merge(table3, rd_all, by = c("var", "category"), all.x = TRUE)
 table3 = merge(table3, var_labels_t3, by = "var", all.x = TRUE, suffixes = c("_old", ""))
 
 table3[, display := fcase(
-  var %in% c("dead", "hospice", "icu", "va", "imv", "dead_or_hospice") & category == "1", label,
+  var %in% c("composite", "d_noicu", "h_noicu", "wicu",
+             "dead", "hospice", "va", "imv") & category == "1", label,
   var == "los" & is.na(category), label,
   !is.na(category) & category != "", paste0("  ", category),
   default = label
 )]
 
 table3[, sort_key := fcase(
-  var == "dead_or_hospice", 1L,
-  var == "dead",            2L,
-  var == "hospice",         3L,
-  var == "icu",             4L,
-  var == "va",              5L,
-  var == "imv",             6L,
-  var == "los",             7L,
+  var == "composite", 1L,
+  var == "d_noicu",   2L,
+  var == "h_noicu",   3L,
+  var == "wicu",      4L,
+  var == "dead",      5L,
+  var == "hospice",   6L,
+  var == "va",        7L,
+  var == "imv",       8L,
+  var == "los",       9L,
   default = 999L
 )]
 
@@ -469,19 +491,16 @@ los_pval = chi_results[var == "los", p_value]
 
 # Ensure LOS header row exists with proper display and p-value
 if (nrow(los_header) == 0) {
-  # Create header row if missing
   los_header = data.table(
     var      = "los",
     category = NA_character_,
     label    = "Length of stay, n (%)",
     display  = "Length of stay, n (%)",
-    sort_key = 7L,
+    sort_key = 9L,
     p_value  = los_pval
   )
 } else {
-  # Make sure display is set correctly for header
   los_header[, display := "Length of stay, n (%)"]
-  # Ensure p_value is set
   if (is.na(los_header$p_value[1]) || length(los_pval) > 0) {
     los_header[, p_value := los_pval]
   }
