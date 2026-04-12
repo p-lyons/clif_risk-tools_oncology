@@ -75,7 +75,6 @@ meta_analyze_aurocs = function(auroc_dt) {
   dt = auroc_dt[!is.na(auroc) & !is.na(auroc_se) & auroc_se > 0]
   
   if (nrow(dt) < 2) {
-    # Can't meta-analyze with <2 studies
     if (nrow(dt) == 1) {
       return(data.table(
         k_sites     = 1L,
@@ -95,9 +94,14 @@ meta_analyze_aurocs = function(auroc_dt) {
     ))
   }
   
-  # Random-effects meta-analysis
+  # Logit-transform AUROCs before pooling (avoids boundary issues)
+  # Delta method: SE_logit = SE_auroc / (auroc * (1 - auroc))
+  dt[, logit_auroc := log(auroc / (1 - auroc))]
+  dt[, logit_se    := auroc_se / (auroc * (1 - auroc))]
+  
+  # Random-effects meta-analysis on logit scale
   ma = tryCatch(
-    rma(yi = dt$auroc, sei = dt$auroc_se, method = "REML"),
+    rma(yi = dt$logit_auroc, sei = dt$logit_se, method = "REML"),
     error = function(e) NULL
   )
   
@@ -109,15 +113,22 @@ meta_analyze_aurocs = function(auroc_dt) {
     ))
   }
   
+  # Back-transform from logit scale
+  pooled_auroc = plogis(as.numeric(ma$beta))
+  ci_lo        = plogis(ma$ci.lb)
+  ci_hi        = plogis(ma$ci.ub)
+  # Delta method for back-transformed SE
+  pooled_se    = ma$se * pooled_auroc * (1 - pooled_auroc)
+  
   data.table(
     k_sites   = nrow(dt),
-    auroc     = as.numeric(ma$beta),
-    auroc_se  = ma$se,
-    ci_lower  = ma$ci.lb,
-    ci_upper  = ma$ci.ub,
+    auroc     = pooled_auroc,
+    auroc_se  = pooled_se,
+    ci_lower  = ci_lo,
+    ci_upper  = ci_hi,
     tau2      = ma$tau2,
     I2        = ma$I2,
-    method    = "random_effects_meta"
+    method    = "random_effects_meta_logit"
   )
 }
 
@@ -504,7 +515,7 @@ if (exists("VARIANT_N") && exists("COHORT_N")) {
   auroc_primary[analysis == "main" & ca_01 == 0, n_encounters := COHORT_N["0"]]
   auroc_primary[analysis == "main" & ca_01 == 1, n_encounters := COHORT_N["1"]]
   
-
+  
   # For sensitivity analyses, lookup from VARIANT_N
   for (v in names(VARIANT_N)) {
     if (v != "main") {
