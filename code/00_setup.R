@@ -1,3 +1,5 @@
+
+
 # Setup script for CLIF project validating risk tools in oncology.
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -461,7 +463,7 @@ vitals_list =
 labs_list = 
   list(
     table_name = "labs",
-    req_vars   = c("lab_category", "lab_value_numeric", "lab_result_dttm"),
+    req_vars   = c("lab_category", "lab_value", "lab_result_dttm"),
     req_values = list(lab_category = req_labs)
   )
 
