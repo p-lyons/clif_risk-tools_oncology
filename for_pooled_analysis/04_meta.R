@@ -299,4 +299,3 @@ meta_table_final   = meta_table
 coef_data_final    = coef_for_plot
 forest_data_final  = forest_data
 slope_preds_final  = all_preds
-slope_models_final = all_models
