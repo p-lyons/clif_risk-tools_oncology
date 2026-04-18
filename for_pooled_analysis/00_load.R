@@ -14,12 +14,15 @@ library(here)
 ALLOWED_SITES = c(
   "emory",
   "hopkins",
-  "ohsu",
+  "michigan",
   "rush",
   "ucmc",
   "umn",
-  "upenn"
+  "upenn",
+  "ohsu"
 )
+
+
 
 SCORE_LABS = c(
   sirs    = "SIRS",
@@ -85,6 +88,89 @@ extract_site_from_path = function(file_path, allowed_sites) {
   return("unknown")
 }
 
+#' Coerce columns corrupted by small-cell suppression (e.g., "<5") back to numeric
+#' Replaces "<N" with a reproducible random integer in [0, N-1], then coerces to
+#' integer. Columns that are already numeric are left untouched.
+#'
+#' @param dt     data.table (modified in place)
+#' @param seed   RNG seed for reproducibility across runs
+#' @return       invisible(dt), modified in place
+coerce_suppressed_counts = function(dt, seed = 42L) {
+  
+  if (nrow(dt) == 0) return(invisible(dt))
+  
+  # columns that should be numeric counts — covers every site-level artifact
+  
+  count_cols = c(
+    "n",
+    "n_total", "n_outcome", "n_no_outcome", "n_pos", "n_neg",
+    "tp", "fp", "tn", "fn",
+    "n_at_risk", "n_became_pos", "n_pos_in_bin",
+    "n_pos_day0", "n_pos_day1",
+    "n_encs", "n_encounters",
+    "n_remaining_ca", "n_excluded_ca", "n_remaining_no", "n_excluded_no",
+    "n_enc_ca", "n_enc_noca", "n_enc", "n_pat",
+    "n_obs", "n_events", "n_ever_pos", "n_with_outcome",
+    "site_n"
+  )
+  
+  # also cover numeric summary columns that could be affected
+  numeric_cols = c(
+    "age_sum", "age_sumsq", "vw_sum", "vw_sumsq",
+    "h_from_admit_sum", "h_from_admit_sumsq",
+    "sd_score", "mean_score",
+    "auroc", "auroc_se", "ci_lower", "ci_upper",
+    "beta_int", "se_int", "beta_intercept", "se_intercept",
+    "beta_score", "se_score", "beta_cancer", "se_cancer"
+  )
+  
+  target_cols = intersect(c(count_cols, numeric_cols), names(dt))
+  
+  if (length(target_cols) == 0) return(invisible(dt))
+  
+  total_replaced = 0L
+  set.seed(seed)
+  
+  for (col in target_cols) {
+    
+    if (!is.character(dt[[col]])) next
+    
+    # identify rows with suppression markers like "<5", "<10", etc.
+    suppressed_idx = grepl("^<\\d+$", dt[[col]], perl = TRUE)
+    n_suppressed   = sum(suppressed_idx)
+    
+    if (n_suppressed > 0) {
+      
+      # extract the upper bound from each "<N" value
+      upper_bounds = as.integer(sub("^<", "", dt[[col]][suppressed_idx]))
+      
+      replacements = vapply(upper_bounds, function(ub) {
+        sample.int(ub, size = 1L) - 1L   # 0 to (N-1)
+      }, integer(1))
+      
+      set(dt, which(suppressed_idx), col, as.character(replacements))
+      total_replaced = total_replaced + n_suppressed
+      
+      message("    -> '", col, "': replaced ", n_suppressed,
+              " suppressed cells with random draws")
+    }
+    
+    # coerce the full column: count cols to integer (via double to handle "1234.0"),
+    # others straight to double
+    if (col %in% count_cols) {
+      set(dt, j = col, value = as.integer(round(as.double(dt[[col]]))))
+    } else {
+      set(dt, j = col, value = as.double(dt[[col]]))
+    }
+  }
+  
+  if (total_replaced > 0) {
+    message("    -> ", total_replaced, " total suppressed cells replaced (seed = ", seed, ")")
+  }
+  
+  invisible(dt)
+}
+
 #' Read files matching a pattern from nested folder structure
 #' Structure: {site}/{analysis_type}/{filename}.csv
 #' Extracts site and analysis variant from file path
@@ -146,6 +232,9 @@ read_grouped_files = function(main_folder, stem, exclude_pattern = NULL,
   
   combined = rbindlist(file_list, fill = TRUE)
   
+  # coerce any columns corrupted by small-cell suppression (e.g., "<5")
+  coerce_suppressed_counts(combined)
+  
   message("  Loaded ", format(nrow(combined), big.mark = ","), " rows from ", length(file_list), " files")
   
   # Report what was loaded
@@ -198,6 +287,10 @@ read_site_root_files = function(main_folder, stem, exclude_pattern = NULL) {
   })
   
   combined = rbindlist(file_list, fill = TRUE)
+  
+  # coerce any columns corrupted by small-cell suppression (e.g., "<5")
+  coerce_suppressed_counts(combined)
+  
   message("  Loaded ", format(nrow(combined), big.mark = ","), " rows from ", length(file_list), " files")
   
   return(combined)
@@ -245,6 +338,10 @@ read_table02_data = function(main_folder) {
   
   cat_combined  = rbindlist(cat_list,  fill = TRUE)
   cont_combined = rbindlist(cont_list, fill = TRUE)
+  
+  # coerce any columns corrupted by small-cell suppression (e.g., "<5")
+  coerce_suppressed_counts(cat_combined)
+  coerce_suppressed_counts(cont_combined)
   
   message("  Loaded table02 data from ", length(cat_list), " sites")
   
@@ -436,6 +533,10 @@ clean_score_names = function(dt) {
 }
 
 clean_score_names(maxscores_ca_raw)
+clean_score_names(sesp_raw)
+clean_score_names(ever_positive_raw)
+clean_score_names(cuminc_raw)
+clean_score_names(first_pos_raw)
 clean_score_names(maxscores_liquid_raw)
 clean_score_names(counts_h24_raw)
 clean_score_names(counts_h12_raw)
