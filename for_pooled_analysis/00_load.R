@@ -22,8 +22,6 @@ ALLOWED_SITES = c(
   "ohsu"
 )
 
-
-
 SCORE_LABS = c(
   sirs    = "SIRS",
   qsofa   = "qSOFA",
