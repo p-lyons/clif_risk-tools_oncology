@@ -186,6 +186,48 @@ upset_comp[, `:=`(
   outcome_lab = fifelse(o_primary_01 == 1, "Deteriorated", "No deterioration")
 )]
 
+comp_pooled =
+  upset_comp_raw |>
+  fgroup_by(ca_01, score, component) |>
+  fsummarize(n = fsum(n), n_encs = fsum(n_encs)) |>
+  fmutate(pct = round(100 * n / n_encs, 1)) |>
+  roworder(score, ca_01, -pct)
+
+# differences and rank comparisons
+comp_diff =
+  comp_pooled |>
+  pivot_wider(
+    names_from  = ca_01,
+    values_from = c(n, n_encs, pct),
+    names_sep   = "_"
+  ) |>
+  fmutate(
+    diff     = pct_1 - pct_0,
+    abs_diff = abs(pct_1 - pct_0)
+  ) |>
+  roworder(score, -abs_diff)
+
+# rank comparison
+comp_ranks =
+  comp_pooled |>
+  fgroup_by(ca_01, score) |>
+  fmutate(rank = frank(-pct)) |>
+  fselect(ca_01, score, component, rank) |>
+  pivot_wider(
+    names_from  = ca_01,
+    values_from = rank,
+    names_prefix = "rank_"
+  ) |>
+  fmutate(rank_shift = rank_1 - rank_0)
+
+# join them
+comp_summary = join(comp_diff, comp_ranks, on = c("score", "component"))
+
+# print nicely
+comp_summary |>
+  fselect(score, component, pct_0, pct_1, diff, rank_0, rank_1, rank_shift) |>
+  print(n = 50)
+
 message("  Component patterns analyzed")
 
 # SUMMARY TABLES ---------------------------------------------------------------
