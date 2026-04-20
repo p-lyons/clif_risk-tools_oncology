@@ -1,5 +1,12 @@
 # ==============================================================================
+# 04_threshold_equivalence.R
 #
+# Replaces the former 04_meta.R (score x cancer interaction meta-analysis).
+# The interaction approach produced a per-SD / per-point OR that (a) was
+# guaranteed to be "significant" at our N regardless of clinical meaning, and
+# (b) did not directly answer the operational question: if we simply move the
+# threshold for each score in cancer patients, can we recover equivalent
+# performance?
 #
 # Three complementary analyses, all built from existing federated count tables
 # (maxscores_ca_raw, sesp_raw) without requiring new site-level extractions:
@@ -564,6 +571,56 @@ if (exists("sesp_raw") && nrow(sesp_raw) > 0) {
   site_ops = data.table()
 }
 
+# NEWS FIELD-CONVENTIONAL OPERATING POINT (for Figure 3) ----------------------
+#
+# The aggregate-score-only sweep above cannot represent the field-conventional
+# NEWS rule ("aggregate >= 5 OR any single parameter >= 3") because the any-3
+# escape clause is not an integer threshold. But Table 2 (and the manuscript's
+# main Results text) report NEWS sensitivity/PPV/NPV using this rule, which
+# is carried by sesp_raw -> site_ops above.
+#
+# Figure 3 needs a single pooled operating point per cohort (non-cancer,
+# cancer) computed under the field-conventional rule, so it can plot that
+# point off the aggregate-only curve. We pool tp/fp/tn/fn across sites for
+# NEWS and recompute sens and alert_rate from the pooled counts, matching the
+# pooled-counts convention used by the rest of this script.
+
+if (nrow(site_ops) > 0 && any(site_ops$score_name == "news")) {
+  
+  news_fc_operating = site_ops[score_name == "news", .(
+    tp = sum(tp, na.rm = TRUE),
+    fp = sum(fp, na.rm = TRUE),
+    tn = sum(tn, na.rm = TRUE),
+    fn = sum(fn, na.rm = TRUE)
+  ), by = ca_01]
+  
+  news_fc_operating[, `:=`(
+    n_total    = tp + fp + tn + fn,
+    sens       = fifelse((tp + fn) > 0, tp / (tp + fn), NA_real_),
+    alert_rate = fifelse((tp + fp + tn + fn) > 0,
+                         (tp + fp) / (tp + fp + tn + fn), NA_real_)
+  )]
+  
+  # Retain only the columns Figure 3 needs; drop the counts now that
+  # derived quantities are computed.
+  news_fc_operating = news_fc_operating[, .(ca_01, sens, alert_rate)]
+  setorder(news_fc_operating, ca_01)
+  
+  message("  NEWS field-conventional operating point:")
+  message(sprintf("    non-cancer: sens=%.3f, alert_rate=%.3f",
+                  news_fc_operating[ca_01 == 0, sens],
+                  news_fc_operating[ca_01 == 0, alert_rate]))
+  message(sprintf("    cancer:     sens=%.3f, alert_rate=%.3f",
+                  news_fc_operating[ca_01 == 1, sens],
+                  news_fc_operating[ca_01 == 1, alert_rate]))
+  
+} else {
+  message("  NEWS rows not present in site_ops; news_fc_operating not built")
+  news_fc_operating = data.table(
+    ca_01 = integer(), sens = numeric(), alert_rate = numeric()
+  )
+}
+
 # PER-SITE THRESHOLD SWEEP (Simpson's paradox check) --------------------------
 #
 # Pooled counts answer "what happens at our 8 sites if we move the threshold."
@@ -979,6 +1036,7 @@ thr_eq_table_final = thr_eq_table
 
 eff_data_final   = eff_data
 site_ops_final   = site_ops      # per-site ops at standard threshold (sesp_raw-based)
+news_fc_operating_final = news_fc_operating  # pooled NEWS field-conventional operating point (Figure 3)
 
 # Simpson's-paradox / site heterogeneity exports -----------------------------
 site_sweep_final = site_sweep    # per-site sweep across all integer thresholds
