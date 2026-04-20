@@ -293,8 +293,15 @@ ggsave(here("output", "figures", "figure_02_cuminc.pdf"),
 # Each panel shows alert rate (y) against sensitivity (x) across integer
 # thresholds, by cohort. Sensitivity-as-target framing: read rightward along x
 # to "achieve X% sensitivity" and read y to see "% of encounters alerted".
-# Standard-threshold operating points are circled. Dotted diagonal = no-skill
-# reference (sens = alert rate).
+# Dotted diagonal = no-skill reference (sens = alert rate).
+#
+# Standard-threshold markers:
+#   - Circles (shape 21) mark each score's standard integer threshold
+#     (SIRS >=2, qSOFA >=2, MEWS >=5, MEWS-SF >=7).
+#   - Diamonds (shape 23) mark the field-conventional NEWS rule used in the
+#     primary analysis: "aggregate >=5 OR any single parameter >=3". This rule
+#     cannot be represented as a single integer threshold, so it sits off the
+#     aggregate-only curve that the integer sweep traces.
 
 message("\n== Building Figure 3 (efficiency curves) ==")
 
@@ -305,18 +312,63 @@ fig3_data = eff_data_final |>
   )
 
 fig3_pal = build_cohort_palette(levels(fig3_data$cohort_lab))
-fig3_std = fig3_data[is_std == TRUE]
+
+# Integer-threshold standard operating points for SIRS, qSOFA, MEWS, MEWS-SF.
+# NEWS is excluded here because its field-conventional rule incorporates the
+# single-parameter escape clause and is plotted separately below.
+fig3_std = fig3_data[is_std == TRUE & score_name != "news"]
+
+# ---- Field-conventional NEWS operating point --------------------------------
+#
+# The "aggregate score >=5 OR any single parameter >=3" rule drives the NEWS
+# numbers reported in Table 2. It is not a single integer threshold and
+# therefore cannot be swept alongside the other scores; instead, we compute
+# its sensitivity and alert rate once per cohort and plot it as a separate
+# marker shape.
+#
+# These values must be pulled from the upstream object that produced the
+# Table 2 NEWS row (generated in 01_tables.R from the field-conventional
+# rule applied to the same cohort and outcome definitions used elsewhere).
+# Do not hardcode from the manuscript; source from the computed object to
+# keep figure and table in lockstep.
+#
+# Expected upstream object: `news_fc_operating_final` with columns
+#   ca_01 (0 = non-cancer, 1 = cancer), sens, alert_rate
+# Built in 04_meta.R from sesp_raw, which carries the field-conventional
+# NEWS positivity rule. If your upstream object is named differently,
+# adjust the line below.
+
+if (!exists("news_fc_operating_final")) {
+  stop(
+    "Figure 3 requires an upstream object `news_fc_operating_final` with NEWS ",
+    "field-conventional (aggregate>=5 OR any parameter>=3) sensitivity and ",
+    "alert_rate by cohort (ca_01 in 0/1). This should be built in 04_meta.R ",
+    "by pooling site_ops across sites for score_name == 'news'."
+  )
+}
+
+fig3_news_fc = news_fc_operating_final |>
+  fmutate(
+    score_name = "news",
+    score_lab  = factor("NEWS", levels = levels(fig3_data$score_lab)),
+    cohort_lab = format_cohort(ca_01, COHORT_N)
+  )
 
 fig3_panel = function(score, show_y = TRUE) {
   
-  d     = fsubset(fig3_data, score_lab == score)
-  d_std = fsubset(fig3_std,  score_lab == score)
+  d       = fsubset(fig3_data,     score_lab == score)
+  d_std   = fsubset(fig3_std,      score_lab == score)
+  d_fc    = fsubset(fig3_news_fc,  score_lab == score)
   
   p = ggplot(d, aes(x = sens, y = alert_rate, color = cohort_lab)) +
     geom_abline(slope = 1, intercept = 0, color = "gray80", linetype = "dotted") +
     geom_line(linewidth = 0.7, alpha = 0.8) +
     geom_point(size = 1.3, alpha = 0.7) +
+    # Standard integer-threshold operating points (SIRS, qSOFA, MEWS, MEWS-SF):
     geom_point(data = d_std, size = 3, shape = 21, stroke = 0.6,
+               aes(fill = cohort_lab), color = "black") +
+    # Field-conventional NEWS operating point (NEWS panel only):
+    geom_point(data = d_fc, size = 3.2, shape = 23, stroke = 0.6,
                aes(fill = cohort_lab), color = "black") +
     facet_wrap(~score_lab) +
     scale_color_manual(values = fig3_pal) +
