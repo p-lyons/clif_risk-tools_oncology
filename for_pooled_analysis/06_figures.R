@@ -1351,9 +1351,12 @@ sf5_long = sf5_long[!is.na(score_lab)]
 
 sf5_pal = build_cohort_palette(levels(sf5_long$cohort_lab))
 
-## Plot: facet_grid with scores as rows, measures as columns -----------------
-# free_x per score lets SIRS (0-4) and NEWS (0-14) each use their own range.
-# y-axis fixed to 0-1 for all measures since they're all proportions.
+## Plot: facet_grid with measures as rows, scores as columns ----------------
+# Scores as columns (left-to-right) mirrors the layout used throughout the
+# rest of the paper's figures. Measures as rows (top-to-bottom) means each
+# row uses its own native score ranges rather than a shared 0-14 x-axis
+# that would squash SIRS (0-4) into a fifth of its panel. y-axis is 0-1 for
+# all measures since they're all proportions.
 
 sf5 = ggplot(sf5_long,
              aes(x = threshold, y = value,
@@ -1362,7 +1365,7 @@ sf5 = ggplot(sf5_long,
               alpha = 0.18, color = NA) +
   geom_line(linewidth = 0.55) +
   geom_point(size = 0.9) +
-  facet_grid(score_lab ~ measure_lab, scales = "free_x", switch = "y") +
+  facet_grid(measure_lab ~ score_lab, scales = "free_x", switch = "y") +
   scale_color_manual(values = sf5_pal, name = "Cohort") +
   scale_fill_manual(values = sf5_pal,  guide = "none") +
   scale_y_continuous(labels = label_percent(), limits = c(0, 1),
@@ -1381,8 +1384,8 @@ sf5 = ggplot(sf5_long,
   theme_ews() +
   theme(
     legend.position  = "top",
-    strip.text.y     = element_text(face = "bold", size = 10, angle = 0),
     strip.text.x     = element_text(face = "bold", size = 10),
+    strip.text.y     = element_text(face = "bold", size = 10, angle = 0),
     strip.placement  = "outside",
     panel.spacing.x  = unit(0.7, "lines"),
     panel.spacing.y  = unit(0.5, "lines"),
@@ -1391,7 +1394,7 @@ sf5 = ggplot(sf5_long,
   )
 
 ggsave(here("output", "figures", "figure_s05_threshold_performance.pdf"),
-       sf5, width = 14, height = 11)
+       sf5, width = 14, height = 10)
 
 # ==============================================================================
 # DONE
