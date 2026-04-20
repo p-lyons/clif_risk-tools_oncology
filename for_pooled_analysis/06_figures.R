@@ -12,15 +12,14 @@
 #
 # Supplement figures (numbered in the order cited in Results):
 #   Figure S1  Flow diagram (built in 01_tables.R)
-#   Figure S2  Score distribution histograms (mirrored)
-#   Figure S3  Risk differences by score value (parallel-shift companion to Fig 1)
-#   Figure S4  Score co-positivity (mirrored UpSet-style)
-#   Figure S5  Component contributions to score positivity (dumbbell)
-#   Figure S6  AUROC comparison (main analysis)
-#   Figure S7  Site-level AUROC caterpillar
-#   Figure S8  Hematologic vs solid tumor AUROC comparison
-#   Figure S9  AUROC comparison (24h analysis)
-#   Figure S10 Sensitivity analysis AUROC differences
+#   Figure S2  Score distributions + risk differences (2-panel combined)
+#   Figure S3  Score co-positivity (mirrored UpSet-style)
+#   Figure S4  Component contributions to score positivity (dumbbell)
+#   Figure S5  Threshold performance characteristics (sens, spec, PPV, NPV
+#              across integer thresholds; 5 scores x 4 measures grid)
+#   Figure S6  AUROC heterogeneity: site-level + cancer subtype (2-panel combined)
+#   Figure S7  Robustness of cancer-noncancer AUROC gap (sensitivity analyses,
+#              24h naive, and 24h clustered bootstrap, unified rows)
 # ==============================================================================
 
 # SETUP ------------------------------------------------------------------------
@@ -363,173 +362,124 @@ ggsave(here("output", "figures", "figure_03_efficiency_curves.pdf"),
        fig3, width = 12, height = 7)
 
 # ==============================================================================
-# SUPP FIGURE 3: Risk differences by score value (parallel-shift companion)
+# SUPP FIGURE 2: Score distributions + risk differences (2-panel combined)
 # ==============================================================================
 #
-# Companion to Figure 1. At each integer score value, the risk difference
-# (cancer minus noncancer) in observed deterioration rate, with Newcombe 95%
-# CIs. Dashed line is the weighted-regression trend from rd_trend_final
-# (anchored at the data's weighted center of mass). A near-flat trend
-# indicates the cancer-noncancer gap is approximately constant across the
-# score range, supporting the operational argument that a threshold shift
-# could restore equivalent performance.
+# Companion to Figure 1. Two-panel vertical stack with shared x-axis facets
+# (free_x scales since score ranges differ).
+#
+#   Panel A: distribution of encounter-level maximum score values by cohort.
+#            Vertical bars (count on y, score on x), faceted by score,
+#            dodged across cohorts.
+#
+#   Panel B: risk difference (cancer - noncancer) at each integer score value,
+#            with Newcombe 95% CIs and a weighted-regression trend line
+#            anchored at the data's weighted center of mass. A near-flat
+#            trend indicates the gap is approximately constant across the
+#            score range (parallel-shift argument).
+#
+# Layout rationale: stacking with shared score facets lets a reader scan
+# vertically within one score to see "where do encounters sit" (top) and
+# "what's the risk gap at each value" (bottom), without reorienting axes.
 
-message("\n== Building Supp Figure 3 (risk differences) ==")
+message("\n== Building Supp Figure 2 (score distributions + risk differences) ==")
 
-sfRD_data = rd_wide_final |>
+## Panel A: histograms rotated (score value on x-axis) ------------------------
+
+sf2a_data = maxscores_ca_raw |>
+  fsubset(tolower(analysis) == "main") |>
+  fgroup_by(score_name, ca_01, max_value) |>
+  fsummarise(n = fsum(n)) |>
+  fungroup() |>
+  fmutate(
+    score_lab    = format_score(score_name),
+    cohort_label = format_cohort(ca_01, COHORT_N)
+  ) |>
+  fsubset(max_value <= 14)
+
+sf2a_pal = build_cohort_palette(levels(sf2a_data$cohort_label))
+
+sf2a = ggplot(sf2a_data, aes(x = max_value, y = n, fill = cohort_label)) +
+  geom_col(position = position_dodge(width = 0.45), width = 0.4) +
+  facet_wrap(~score_lab, nrow = 1, scales = "free_x") +
+  scale_fill_manual(values = sf2a_pal, name = "Cohort") +
+  scale_y_continuous(labels = label_comma()) +
+  scale_x_continuous(breaks = function(x) seq(floor(x[1]), ceiling(x[2]), by = 1L)) +
+  labs(x = NULL, y = "Number of Encounters") +
+  theme_ews() +
+  theme(
+    legend.position    = "top",
+    panel.grid.major.x = element_blank(),
+    strip.text         = element_text(face = "bold", size = 10)
+  )
+
+## Panel B: risk differences with trend lines --------------------------------
+
+sf2b_data = rd_wide_final |>
   fsubset(has_both == TRUE) |>
   fmutate(score_lab = format_score(score_name))
 
-sfRD_trend_anchors = sfRD_data[, .(
+sf2b_trend_anchors = sf2b_data[, .(
   rd_mean = weighted.mean(rd, w = n_nc + n_ca, na.rm = TRUE),
   x_mean  = weighted.mean(max_value, w = n_nc + n_ca, na.rm = TRUE),
   x_min   = min(max_value, na.rm = TRUE),
   x_max   = max(max_value, na.rm = TRUE)
 ), by = score_name]
 
-sfRD_trend = merge(
+sf2b_trend = merge(
   rd_trend_final[, .(score_name, slope_rd_per_pt)],
-  sfRD_trend_anchors,
+  sf2b_trend_anchors,
   by = "score_name"
 )
-sfRD_trend[, `:=`(
+sf2b_trend[, `:=`(
   y_at_xmin = rd_mean + slope_rd_per_pt * (x_min - x_mean),
   y_at_xmax = rd_mean + slope_rd_per_pt * (x_max - x_mean),
   score_lab = format_score(score_name)
 )]
 
-sfRD_panel = function(score, show_y = TRUE, x_breaks = NULL) {
-  
-  d  = fsubset(sfRD_data,  score_lab == score)
-  tr = fsubset(sfRD_trend, score_lab == score)
-  
-  p = ggplot(d, aes(x = max_value, y = rd)) +
-    geom_hline(yintercept = 0, color = "gray60", linewidth = 0.3) +
-    geom_errorbar(aes(ymin = rd_lo, ymax = rd_hi), width = 0, color = "gray30") +
-    geom_point(color = "black", size = 1.8) +
-    geom_segment(data = tr,
-                 aes(x = x_min, xend = x_max, y = y_at_xmin, yend = y_at_xmax),
-                 linetype = "dashed", color = "gray40", linewidth = 0.5) +
-    facet_wrap(~score_lab) +
-    scale_y_continuous(labels = label_percent(), limits = c(-0.1, 0.5)) +
-    theme_ews() +
-    theme(panel.grid.major.x = element_blank()) +
-    labs(x = "Score value", y = if (show_y) "Risk difference (cancer − non-cancer)" else NULL)
-  
-  if (!is.null(x_breaks)) p = p + scale_x_continuous(breaks = x_breaks)
-  p
-}
-
-sfRD_sirs   = sfRD_panel("SIRS",    TRUE,  0:4)
-sfRD_qsofa  = sfRD_panel("QSOFA",   FALSE, 0:3)
-sfRD_mews   = sfRD_panel("MEWS",    FALSE, seq(0, 12, 2))
-sfRD_mewssf = sfRD_panel("MEWS-SF", FALSE, seq(0, 12, 2))
-sfRD_news   = sfRD_panel("NEWS",    FALSE, seq(0, 16, 2))
-
-sfRD = sfRD_sirs | sfRD_qsofa | sfRD_mews | sfRD_mewssf | sfRD_news
-
-ggsave(here("output", "figures", "figure_s03_risk_differences.pdf"),
-       sfRD, width = 16, height = 4)
-
-# ==============================================================================
-# SUPP FIGURE 2: Score distribution histograms (mirrored)
-# ==============================================================================
-
-message("\n== Building Supp Figure 2 (score histograms) ==")
-
-sf2_data = maxscores_ca_raw |>
-  fsubset(tolower(analysis) == "main") |>
-  fgroup_by(score_name, ca_01, max_value) |>
-  fsummarise(n = fsum(n)) |>
-  fmutate(
-    score_label  = format_score(score_name),
-    cohort_label = format_cohort(ca_01, COHORT_N),
-    n_mirror     = fifelse(ca_01 == 1, -n, n)
-  ) |>
-  fsubset(max_value <= 11)
-
-sf2 = ggplot(sf2_data, aes(x = n_mirror, y = factor(max_value), fill = cohort_label)) +
-  geom_bar(stat = "identity", width = 0.8) +
-  geom_vline(xintercept = 0, linewidth = 0.3, color = "black") +
-  facet_wrap(~score_label, ncol = 1, scales = "free_y") +
-  scale_fill_manual(values = build_cohort_palette(levels(sf2_data$cohort_label)), name = "Cohort") +
-  scale_x_continuous(labels = function(x) label_comma()(abs(x))) +
-  labs(y = "Maximum Score Value", x = "Number of Encounters") +
+sf2b = ggplot(sf2b_data, aes(x = max_value, y = rd)) +
+  geom_hline(yintercept = 0, color = "gray60", linewidth = 0.3) +
+  geom_errorbar(aes(ymin = rd_lo, ymax = rd_hi), width = 0, color = "gray30") +
+  geom_point(color = "black", size = 1.8) +
+  geom_segment(
+    data = sf2b_trend,
+    aes(x = x_min, xend = x_max, y = y_at_xmin, yend = y_at_xmax),
+    linetype = "dashed", color = "gray40", linewidth = 0.5
+  ) +
+  facet_wrap(~score_lab, nrow = 1, scales = "free_x") +
+  scale_y_continuous(labels = label_percent(), limits = c(-0.1, 0.5)) +
+  scale_x_continuous(breaks = function(x) seq(floor(x[1]), ceiling(x[2]), by = 1L)) +
+  labs(x = "Score value (encounter maximum)",
+       y = "Absolute risk difference\n(cancer − non-cancer)") +
   theme_ews() +
-  theme(legend.position = "top")
-
-ggsave(here("output", "figures", "figure_s02_score_histograms.pdf"),
-       sf2, width = 6, height = 11)
-
-# ==============================================================================
-# SUPP FIGURE 9: AUROC comparison (24h analysis)
-# ==============================================================================
-
-message("\n== Building Supp Figure 9 (AUROC 24h) ==")
-
-sf3_pooled = counts_h24_raw |>
-  fsubset(analysis == "main") |>
-  fgroup_by(score_name, ca_01, value, outcome) |>
-  fsummarise(n = fsum(n)) |>
-  fungroup() |>
-  as.data.frame()
-
-sf3_combos = unique(sf3_pooled[, c("score_name", "ca_01")])
-
-sf3_list = vector("list", nrow(sf3_combos))
-for (i in seq_len(nrow(sf3_combos))) {
-  sc = sf3_combos$score_name[i]
-  ca = sf3_combos$ca_01[i]
-  d  = sf3_pooled[sf3_pooled$score_name == sc & sf3_pooled$ca_01 == ca, , drop = FALSE]
-  auc_res = as.data.frame(calc_auroc_from_counts(d))
-  sf3_list[[i]] = data.frame(
-    score_name = sc,
-    ca_01      = ca,
-    auroc      = auc_res$auroc,
-    se         = auc_res$se,
-    ci_lower   = auc_res$ci_lower,
-    ci_upper   = auc_res$ci_upper,
-    n_events   = auc_res$n_events,
-    n_total    = auc_res$n_total,
-    stringsAsFactors = FALSE
-  )
-}
-
-sf3_aurocs = do.call(rbind, sf3_list) |>
-  as_tidytable() |>
-  fmutate(
-    score_label  = format_score(score_name),
-    cohort_label = format_cohort(ca_01, COHORT_N)
+  theme(
+    panel.grid.major.x = element_blank(),
+    strip.text         = element_text(face = "bold", size = 10)
   )
 
-sf3_pal = build_cohort_palette(levels(sf3_aurocs$cohort_label))
+## assemble: panel A on top (taller), panel B below (shorter) ----------------
+# strip labels on panel A only (panel B shares same facet columns; redundant
+# strip on B is dropped to save vertical space and reinforce shared x-axis).
 
-sf3 = ggplot(sf3_aurocs, aes(x = score_label, y = auroc, fill = cohort_label)) +
-  geom_errorbar(
-    aes(ymin = ci_lower, ymax = ci_upper),
-    width = 0.2, linewidth = 0.5, color = "black",
-    position = position_dodge(width = 0.4)
-  ) +
-  geom_point(
-    shape = 21, color = "black", size = 4, stroke = 0.7,
-    position = position_dodge(width = 0.4)
-  ) +
-  scale_fill_manual(values = sf3_pal, name = "Cohort") +
-  scale_y_continuous(limits = c(0.62, 0.78), breaks = seq(0.62, 0.78, 0.02)) +
-  labs(x = NULL, y = "AUROC (95% CI)") +
-  theme_ews() +
-  theme(legend.position = "top", axis.text.x = element_text(face = "bold", size = 11))
+sf2b_nostrip = sf2b + theme(strip.text = element_blank(),
+                            strip.background = element_blank())
 
-ggsave(here("output", "figures", "figure_s09_auroc_24h.pdf"),
-       sf3, width = 7, height = 5)
+sf2 = (sf2a / sf2b_nostrip) +
+  plot_layout(heights = c(1.3, 1)) +
+  plot_annotation(tag_levels = "A",
+                  theme = theme(plot.tag = element_text(face = "bold", size = 12)))
+
+ggsave(here("output", "figures", "figure_s02_score_distributions.pdf"),
+       sf2, width = 16, height = 7)
 
 # ==============================================================================
-# SUPP FIGURE 7: Site-level AUROC caterpillar
+# SUPP FIGURE 6 (Panel A): Site-level AUROC caterpillar
 # ==============================================================================
+# Prepared here; combined with Panel B (heme/solid) below into sf6.
 
-message("\n== Building Supp Figure 7 (AUROC caterpillar) ==")
+message("\n== Building Supp Figure 6 Panel A (site-level AUROCs) ==")
 
-sf4_prep = maxscores_ca_raw |>
+sf6a_prep = maxscores_ca_raw |>
   fsubset(analysis == "main") |>
   fmutate(value = max_value) |>
   fgroup_by(site, score_name, ca_01, value, outcome) |>
@@ -537,17 +487,17 @@ sf4_prep = maxscores_ca_raw |>
   fungroup() |>
   as.data.frame()
 
-sf4_combos = unique(sf4_prep[, c("site", "score_name", "ca_01")])
+sf6a_combos = unique(sf6a_prep[, c("site", "score_name", "ca_01")])
 
-sf4_list = vector("list", nrow(sf4_combos))
-for (i in seq_len(nrow(sf4_combos))) {
-  st = sf4_combos$site[i]
-  sc = sf4_combos$score_name[i]
-  ca = sf4_combos$ca_01[i]
-  d  = sf4_prep[sf4_prep$site == st & sf4_prep$score_name == sc & sf4_prep$ca_01 == ca, ,
-                drop = FALSE]
+sf6a_list = vector("list", nrow(sf6a_combos))
+for (i in seq_len(nrow(sf6a_combos))) {
+  st = sf6a_combos$site[i]
+  sc = sf6a_combos$score_name[i]
+  ca = sf6a_combos$ca_01[i]
+  d  = sf6a_prep[sf6a_prep$site == st & sf6a_prep$score_name == sc & sf6a_prep$ca_01 == ca, ,
+                 drop = FALSE]
   auc_res = as.data.frame(calc_auroc_from_counts(d))
-  sf4_list[[i]] = data.frame(
+  sf6a_list[[i]] = data.frame(
     site       = st,
     score_name = sc,
     ca_01      = ca,
@@ -560,9 +510,9 @@ for (i in seq_len(nrow(sf4_combos))) {
     stringsAsFactors = FALSE
   )
 }
-sf4_aurocs = do.call(rbind, sf4_list)
+sf6a_aurocs = do.call(rbind, sf6a_list)
 
-site_order = sf4_aurocs |>
+site_order = sf6a_aurocs |>
   as_tidytable() |>
   fsubset(score_name == "news" & ca_01 == 0) |>
   arrange(auroc) |>
@@ -579,23 +529,23 @@ if (exists("SITE_N")) {
   pooled_label = "Pooled"
 }
 
-sf4_pooled_prep = sf4_prep |>
+sf6a_pooled_prep = sf6a_prep |>
   as_tidytable() |>
   fgroup_by(score_name, ca_01, value, outcome) |>
   fsummarise(n = fsum(n)) |>
   fungroup() |>
   as.data.frame()
 
-sf4_pooled_combos = unique(sf4_pooled_prep[, c("score_name", "ca_01")])
+sf6a_pooled_combos = unique(sf6a_pooled_prep[, c("score_name", "ca_01")])
 
-sf4_pooled_list = vector("list", nrow(sf4_pooled_combos))
-for (i in seq_len(nrow(sf4_pooled_combos))) {
-  sc = sf4_pooled_combos$score_name[i]
-  ca = sf4_pooled_combos$ca_01[i]
-  d  = sf4_pooled_prep[sf4_pooled_prep$score_name == sc & sf4_pooled_prep$ca_01 == ca, ,
-                       drop = FALSE]
+sf6a_pooled_list = vector("list", nrow(sf6a_pooled_combos))
+for (i in seq_len(nrow(sf6a_pooled_combos))) {
+  sc = sf6a_pooled_combos$score_name[i]
+  ca = sf6a_pooled_combos$ca_01[i]
+  d  = sf6a_pooled_prep[sf6a_pooled_prep$score_name == sc & sf6a_pooled_prep$ca_01 == ca, ,
+                        drop = FALSE]
   auc_res = as.data.frame(calc_auroc_from_counts(d))
-  sf4_pooled_list[[i]] = data.frame(
+  sf6a_pooled_list[[i]] = data.frame(
     site       = "pooled",
     score_name = sc,
     ca_01      = ca,
@@ -608,9 +558,9 @@ for (i in seq_len(nrow(sf4_pooled_combos))) {
     stringsAsFactors = FALSE
   )
 }
-sf4_pooled = do.call(rbind, sf4_pooled_list)
+sf6a_pooled = do.call(rbind, sf6a_pooled_list)
 
-sf4_all = rbind(sf4_aurocs, sf4_pooled) |>
+sf6a_all = rbind(sf6a_aurocs, sf6a_pooled) |>
   as_tidytable() |>
   fmutate(
     score_label  = format_score(score_name),
@@ -620,11 +570,11 @@ sf4_all = rbind(sf4_aurocs, sf4_pooled) |>
     is_pooled    = site == "pooled"
   )
 
-sf4_pal = build_cohort_palette(levels(sf4_all$cohort_label))
+sf6a_pal = build_cohort_palette(levels(sf6a_all$cohort_label))
 
-sf4 = ggplot(sf4_all, aes(x = site_label, y = auroc, color = cohort_label)) +
+sf6a = ggplot(sf6a_all, aes(x = site_label, y = auroc, color = cohort_label)) +
   geom_hline(
-    data = sf4_all |> fsubset(is_pooled),
+    data = sf6a_all |> fsubset(is_pooled),
     aes(yintercept = auroc, color = cohort_label),
     linetype = "dashed", linewidth = 0.4, alpha = 0.5
   ) +
@@ -635,101 +585,37 @@ sf4 = ggplot(sf4_all, aes(x = site_label, y = auroc, color = cohort_label)) +
   ) +
   geom_point(aes(shape = is_pooled), size = 2.5, position = position_dodge(width = 0.6)) +
   facet_wrap(~score_label, nrow = 1) +
-  scale_color_manual(values = sf4_pal, name = "Cohort") +
+  scale_color_manual(values = sf6a_pal, name = "Cohort") +
   scale_shape_manual(values = c("FALSE" = 16, "TRUE" = 18), guide = "none") +
   scale_y_continuous(limits = c(0.60, 0.90), breaks = seq(0.60, 0.90, 0.05)) +
   coord_flip() +
-  labs(x = NULL, y = "AUROC (95% CI)") +
+  labs(x = NULL, y = NULL) +
   theme_ews() +
   theme(legend.position = "top", panel.grid.major.y = element_blank())
 
-ggsave(here("output", "figures", "figure_s07_auroc_by_site.pdf"),
-       sf4, width = 14, height = 6)
-
 # ==============================================================================
-# SUPP FIGURE 10: Sensitivity analysis AUROC differences
+# SUPP FIGURE 6 (Panel B): Hematologic vs solid tumor AUROC comparison
 # ==============================================================================
+# Prepared here, then combined with Panel A into sf6 below.
+#
+# Non-cancer baseline: meta-analyze site-level AUROCs from auroc_enc_raw to
+# match the CI construction used for solid/hematologic subgroups (both use
+# meta_analyze_aurocs via site-level DeLong SEs), so CIs are visually
+# comparable across cancer-type categories. Using calc_auroc_from_counts on
+# pooled counts would produce CIs one order of magnitude narrower because
+# between-site heterogeneity would not be reflected.
 
-message("\n== Building Supp Figure 10 (sensitivity AUROC diffs) ==")
+message("\n== Building Supp Figure 6 Panel B (heme vs solid AUROC) ==")
 
-if (exists("VARIANT_N")) {
-  sf6_labels = c(
-    main           = sprintf("Main (n=%s)",                format(VARIANT_N["main"],           big.mark = ",")),
-    one_enc_per_pt = sprintf("One enc/patient (n=%s)",     format(VARIANT_N["one_enc_per_pt"], big.mark = ",")),
-    win0_96h       = sprintf("0-96h window (n=%s)",        format(VARIANT_N["win0_96h"],       big.mark = ",")),
-    fullcode_only  = sprintf("Full code only (n=%s)",      format(VARIANT_N["fullcode_only"],  big.mark = ",")),
-    no_ed_req      = sprintf("No ED req (n=%s)",           format(VARIANT_N["no_ed_req"],      big.mark = ","))
-  )
-} else {
-  sf6_labels = c(
-    main           = "Main",
-    one_enc_per_pt = "One encounter/patient",
-    win0_96h       = "0-96h window",
-    fullcode_only  = "Full code only",
-    no_ed_req      = "No ED requirement"
-  )
-}
+sf6b_nc_combos = unique(auroc_enc_raw[analysis == "main" & ca_01 == 0L,
+                                      .(score_name)])
 
-sf6_wide = auroc_results_final |>
-  fsubset(metric == "Encounter max") |>
-  fselect(score_name, ca_01, analysis, auroc, auroc_se) |>
-  pivot_wider(names_from = ca_01, values_from = c(auroc, auroc_se), names_sep = "_") |>
-  fmutate(
-    diff           = auroc_1 - auroc_0,
-    diff_se        = sqrt(auroc_se_1^2 + auroc_se_0^2),
-    diff_lower     = diff - 1.96 * diff_se,
-    diff_upper     = diff + 1.96 * diff_se,
-    score_label    = format_score(score_name),
-    analysis_label = factor(analysis, levels = names(sf6_labels), labels = sf6_labels)
-  )
-
-sf6 = ggplot(sf6_wide, aes(x = analysis_label, y = diff, ymin = diff_lower, ymax = diff_upper)) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
-  geom_errorbar(width = 0.2, linewidth = 0.5, color = "gray30") +
-  geom_point(aes(fill = abs(diff)), shape = 21, size = 3) +
-  facet_wrap(~score_label, nrow = 1) +
-  scale_fill_viridis_c(option = "magma", begin = 0.2, end = 0.9, guide = "none") +
-  scale_y_continuous(
-    limits = c(-0.10, 0.06),
-    breaks = seq(-0.10, 0.06, 0.04),
-    labels = function(x) sprintf("%.2f", x)
-  ) +
-  coord_flip() +
-  labs(
-    x = NULL, y = "AUROC Difference (Cancer − Non-Cancer)",
-    caption = "Positive values indicate higher discrimination in cancer patients"
-  ) +
-  theme_ews() +
-  theme(
-    panel.grid.major.y = element_blank(),
-    plot.caption       = element_text(hjust = 0.5, size = 10, face = "italic", color = "gray40")
-  )
-
-ggsave(here("output", "figures", "figure_s10_sensitivity_auroc_diff.pdf"),
-       sf6, width = 12, height = 5)
-
-# ==============================================================================
-# SUPP FIGURE 8: Hematologic vs solid tumor AUROC comparison
-# ==============================================================================
-
-message("\n== Building Supp Figure 8 (heme vs solid AUROC) ==")
-
-## non-cancer baseline: meta-analyze site-level AUROCs from auroc_enc_raw to
-## match the CI construction used for solid/hematologic subgroups (both use
-## meta_analyze_aurocs via site-level DeLong SEs), so CIs are visually
-## comparable across cancer-type categories. Using calc_auroc_from_counts on
-## pooled counts would produce CIs one order of magnitude narrower because
-## between-site heterogeneity would not be reflected.
-
-sf7_nc_combos = unique(auroc_enc_raw[analysis == "main" & ca_01 == 0L,
-                                     .(score_name)])
-
-sf7_nc_list = vector("list", nrow(sf7_nc_combos))
-for (i in seq_len(nrow(sf7_nc_combos))) {
-  sc  = sf7_nc_combos$score_name[i]
+sf6b_nc_list = vector("list", nrow(sf6b_nc_combos))
+for (i in seq_len(nrow(sf6b_nc_combos))) {
+  sc  = sf6b_nc_combos$score_name[i]
   sub = auroc_enc_raw[analysis == "main" & ca_01 == 0L & score_name == sc]
   ma  = meta_analyze_aurocs(sub)
-  sf7_nc_list[[i]] = data.frame(
+  sf6b_nc_list[[i]] = data.frame(
     score_name  = sc,
     auroc       = ma$auroc,
     ci_lower    = ma$ci_lower,
@@ -739,44 +625,361 @@ for (i in seq_len(nrow(sf7_nc_combos))) {
   )
 }
 
-sf7_noncancer = do.call(rbind, sf7_nc_list)
+sf6b_noncancer = do.call(rbind, sf6b_nc_list)
 
-sf7_data = liquid_aurocs_final |>
+sf6b_data = liquid_aurocs_final |>
   fselect(score_name, auroc, ci_lower, ci_upper, cancer_type) |>
   as.data.frame() |>
-  rbind(sf7_noncancer) |>
+  rbind(sf6b_noncancer) |>
   as_tidytable() |>
   fmutate(
     score_label = format_score(score_name),
     cancer_type = factor(cancer_type, levels = c("Non-Cancer", "Solid", "Hematologic"))
   )
 
-pal_cancer_type = c("Non-Cancer" = "#4575b4", "Solid" = "#f4a582", "Hematologic" = "#d73027")
+# Palette: Non-Cancer blue matches Panel A; Solid/Hematologic pair with warm
+# tones to signal the cancer subgroup split.
+sf6b_pal = c("Non-Cancer" = "#4575b4", "Solid" = "#f4a582", "Hematologic" = "#d73027")
 
-sf7 = ggplot(sf7_data, aes(x = score_label, y = auroc, fill = cancer_type)) +
+# Faceted by score with coord_flip, to mirror Panel A's layout. Each facet
+# shows three horizontal rows (Non-Cancer, Solid, Hematologic) with AUROC on
+# the shared x-axis. Y-axis range standardized to 0.60-0.90 to match Panel A.
+sf6b = ggplot(sf6b_data, aes(x = cancer_type, y = auroc, color = cancer_type)) +
   geom_errorbar(
     aes(ymin = ci_lower, ymax = ci_upper),
-    width = 0.2, linewidth = 0.5, color = "black",
-    position = position_dodge(width = 0.7)
+    width = 0.2, linewidth = 0.5
   ) +
-  geom_point(
-    shape = 21, color = "black", size = 4, stroke = 0.7,
-    position = position_dodge(width = 0.7)
-  ) +
-  scale_fill_manual(values = pal_cancer_type, name = "Cohort") +
-  scale_y_continuous(limits = c(0.62, 0.85), breaks = seq(0.65, 0.95, 0.05)) +
+  geom_point(size = 2.5) +
+  facet_wrap(~score_label, nrow = 1) +
+  scale_color_manual(values = sf6b_pal, name = "Cancer type") +
+  scale_y_continuous(limits = c(0.60, 0.90), breaks = seq(0.60, 0.90, 0.05)) +
+  coord_flip() +
   labs(x = NULL, y = "AUROC (95% CI)") +
   theme_ews() +
-  theme(legend.position = "top", axis.text.x = element_text(face = "bold", size = 11))
+  theme(legend.position = "top", panel.grid.major.y = element_blank())
 
-ggsave(here("output", "figures", "figure_s08_heme_solid_auroc.pdf"),
-       sf7, width = 8, height = 5)
+## Assemble Supp Figure 6: Panel A (site) / Panel B (heme-solid) -------------
+# Panel A needs more vertical space (9 rows per facet) than Panel B (3 rows
+# per facet). Use relative heights 3:1 to reflect this. Strip labels on
+# Panel A only; Panel B reuses the same facet columns so strips are dropped
+# for compactness.
+
+sf6b_nostrip = sf6b + theme(strip.text = element_blank(),
+                            strip.background = element_blank())
+
+sf6 = (sf6a / sf6b_nostrip) +
+  plot_layout(heights = c(3, 1)) +
+  plot_annotation(tag_levels = "A",
+                  theme = theme(plot.tag = element_text(face = "bold", size = 12)))
+
+ggsave(here("output", "figures", "figure_s06_auroc_heterogeneity.pdf"),
+       sf6, width = 14, height = 8)
 
 # ==============================================================================
-# SUPP FIGURE 4: Score co-positivity (mirrored UpSet-style)
+# SUPP FIGURE 7: Robustness of the cancer-noncancer AUROC gap
+# ==============================================================================
+#
+# Unified view of how the cancer-noncancer AUROC difference behaves under
+# varying conditions. Each row on the y-axis is a condition; within each
+# score facet, the point is the point estimate of (cancer - non-cancer)
+# AUROC and the error bar is the 95% CI. Dashed vertical line at 0.
+#
+# Rows (bottom to top after coord_flip):
+#   - Main analysis (primary sample)
+#   - One encounter per patient
+#   - 0-96 hour observation window
+#   - Full code only
+#   - No ED admission requirement
+#   - 24-hour horizon, naive (treats repeated obs as independent)
+#   - 24-hour horizon, clustered bootstrap (accounts for non-independence)
+#
+# The two 24-hour rows illustrate how accounting for within-encounter
+# correlation widens the CI enough that it crosses zero, per the Results.
+
+message("\n== Building Supp Figure 7 (robustness of AUROC gap) ==")
+
+## Row labels for variants --------------------------------------------------
+
+if (exists("VARIANT_N")) {
+  sf7_variant_labels = c(
+    main           = sprintf("Main (n=%s)",            format(VARIANT_N["main"],           big.mark = ",")),
+    one_enc_per_pt = sprintf("One enc/patient (n=%s)", format(VARIANT_N["one_enc_per_pt"], big.mark = ",")),
+    win0_96h       = sprintf("0-96h window (n=%s)",    format(VARIANT_N["win0_96h"],       big.mark = ",")),
+    fullcode_only  = sprintf("Full code only (n=%s)",  format(VARIANT_N["fullcode_only"],  big.mark = ",")),
+    no_ed_req      = sprintf("No ED req (n=%s)",       format(VARIANT_N["no_ed_req"],      big.mark = ","))
+  )
+} else {
+  sf7_variant_labels = c(
+    main           = "Main",
+    one_enc_per_pt = "One encounter/patient",
+    win0_96h       = "0-96h window",
+    fullcode_only  = "Full code only",
+    no_ed_req      = "No ED requirement"
+  )
+}
+
+sf7_h24_naive_label = "24h horizon (naive)"
+sf7_h24_boot_label  = "24h horizon (bootstrap)"
+
+## Part 1: sensitivity-analysis variant diffs (encounter-level) --------------
+# Use auroc_results_final (site-level meta-analyzed AUROCs); compute the
+# (cancer - non-cancer) diff per variant per score with analytic SEs.
+
+sf7_sens = auroc_results_final |>
+  fsubset(metric == "Encounter max") |>
+  fselect(score_name, ca_01, analysis, auroc, auroc_se) |>
+  pivot_wider(names_from = ca_01, values_from = c(auroc, auroc_se), names_sep = "_") |>
+  fmutate(
+    diff       = auroc_1 - auroc_0,
+    diff_se    = sqrt(auroc_se_1^2 + auroc_se_0^2),
+    diff_lower = diff - 1.96 * diff_se,
+    diff_upper = diff + 1.96 * diff_se,
+    row_key    = analysis
+  ) |>
+  fselect(score_name, row_key, diff, diff_lower, diff_upper) |>
+  as.data.table()
+
+## Part 2: 24-hour horizon, naive (pooled counts, no clustering adjustment) --
+# Compute per-cohort AUROC from counts_h24_raw using calc_auroc_from_counts,
+# then take the (cancer - non-cancer) difference and combine analytic SEs.
+
+sf7_h24n_pooled = counts_h24_raw |>
+  fsubset(analysis == "main") |>
+  fgroup_by(score_name, ca_01, value, outcome) |>
+  fsummarise(n = fsum(n)) |>
+  fungroup() |>
+  as.data.frame()
+
+sf7_h24n_combos = unique(sf7_h24n_pooled[, c("score_name", "ca_01")])
+
+sf7_h24n_list = vector("list", nrow(sf7_h24n_combos))
+for (i in seq_len(nrow(sf7_h24n_combos))) {
+  sc = sf7_h24n_combos$score_name[i]
+  ca = sf7_h24n_combos$ca_01[i]
+  d  = sf7_h24n_pooled[sf7_h24n_pooled$score_name == sc & sf7_h24n_pooled$ca_01 == ca, ,
+                       drop = FALSE]
+  auc_res = as.data.frame(calc_auroc_from_counts(d))
+  sf7_h24n_list[[i]] = data.frame(
+    score_name = sc,
+    ca_01      = ca,
+    auroc      = auc_res$auroc,
+    se         = auc_res$se,
+    stringsAsFactors = FALSE
+  )
+}
+sf7_h24n_aurocs = as_tidytable(do.call(rbind, sf7_h24n_list))
+
+sf7_h24n = sf7_h24n_aurocs |>
+  pivot_wider(names_from = ca_01, values_from = c(auroc, se), names_sep = "_") |>
+  fmutate(
+    diff       = auroc_1 - auroc_0,
+    diff_se    = sqrt(se_1^2 + se_0^2),
+    diff_lower = diff - 1.96 * diff_se,
+    diff_upper = diff + 1.96 * diff_se,
+    row_key    = "h24_naive"
+  ) |>
+  fselect(score_name, row_key, diff, diff_lower, diff_upper) |>
+  as.data.table()
+
+## Part 3: 24-hour horizon, clustered bootstrap -----------------------------
+# Defensive handling: boot_h24_raw's exact structure is not documented in the
+# scripts we have. We attempt to auto-detect:
+#   - If it already contains a per-score difference column (e.g. 'diff_auc'
+#     or 'diff') with an 'iter' column, compute 2.5/50/97.5 percentiles.
+#   - Otherwise, if it has per-cohort per-iter AUROC columns, pivot and diff.
+#   - Otherwise, if it has counts per iter, compute per-iter AUROC via
+#     calc_auroc_from_counts and diff across ca_01.
+# If none of these match, we fall back to the naive 24h CI with a message.
+
+sf7_h24b = data.table()
+
+compute_boot_h24 = function(boot_dt) {
+  
+  if (!is.data.table(boot_dt)) boot_dt = as.data.table(boot_dt)
+  if (nrow(boot_dt) == 0) return(data.table())
+  
+  # Defensive: boot_h24_raw is not cleaned by clean_score_names() in 00_load.R,
+  # so names may carry the "_total" suffix (e.g., "sirs_total"). Strip it now
+  # so downstream format_score() matches the clean levels ("sirs", "qsofa", ...).
+  if ("score_name" %in% names(boot_dt)) {
+    boot_dt[, score_name := str_remove(score_name, "_total$")]
+  }
+  
+  nms = names(boot_dt)
+  iter_col = intersect(c("iter", "boot_iter", "bootstrap_iter", "b"), nms)[1]
+  
+  if (is.na(iter_col)) {
+    message("    boot_h24_raw has no recognizable iteration column; skipping bootstrap row.")
+    return(data.table())
+  }
+  
+  # Case A: per-iter diff already computed (a column named diff* that varies
+  # across iterations within score).
+  diff_col = intersect(c("diff_auc", "diff", "auroc_diff", "auc_diff"), nms)[1]
+  if (!is.na(diff_col)) {
+    out = boot_dt[, .(
+      diff       = median(get(diff_col), na.rm = TRUE),
+      diff_lower = quantile(get(diff_col), 0.025, na.rm = TRUE, names = FALSE),
+      diff_upper = quantile(get(diff_col), 0.975, na.rm = TRUE, names = FALSE)
+    ), by = score_name]
+    out[, row_key := "h24_bootstrap"]
+    return(out[, .(score_name, row_key, diff, diff_lower, diff_upper)])
+  }
+  
+  # Case B: per-iter per-cohort AUROC column.
+  auroc_col = intersect(c("auroc", "auc"), nms)[1]
+  if (!is.na(auroc_col) && "ca_01" %in% nms) {
+    wide = dcast(
+      boot_dt,
+      as.formula(paste(iter_col, "+ score_name ~ ca_01")),
+      value.var = auroc_col
+    )
+    setnames(wide, c("0", "1"), c("auroc_nc", "auroc_ca"), skip_absent = TRUE)
+    if (all(c("auroc_nc", "auroc_ca") %in% names(wide))) {
+      wide[, diff := auroc_ca - auroc_nc]
+      out = wide[, .(
+        diff       = median(diff, na.rm = TRUE),
+        diff_lower = quantile(diff, 0.025, na.rm = TRUE, names = FALSE),
+        diff_upper = quantile(diff, 0.975, na.rm = TRUE, names = FALSE)
+      ), by = score_name]
+      out[, row_key := "h24_bootstrap"]
+      return(out[, .(score_name, row_key, diff, diff_lower, diff_upper)])
+    }
+  }
+  
+  # Case C: per-iter counts (score_name, ca_01, value, outcome, n, iter).
+  if (all(c("score_name", "ca_01", "value", "outcome", "n") %in% nms)) {
+    iters = unique(boot_dt[[iter_col]])
+    per_iter = vector("list", length(iters))
+    for (k in seq_along(iters)) {
+      sub = boot_dt[get(iter_col) == iters[k]]
+      sub_agg = sub[, .(n = sum(n)), by = .(score_name, ca_01, value, outcome)]
+      combos  = unique(sub_agg[, .(score_name, ca_01)])
+      lst = vector("list", nrow(combos))
+      for (j in seq_len(nrow(combos))) {
+        sc = combos$score_name[j]; ca = combos$ca_01[j]
+        d  = as.data.frame(sub_agg[score_name == sc & ca_01 == ca])
+        auc_res = as.data.frame(calc_auroc_from_counts(d))
+        lst[[j]] = data.table(
+          score_name = sc, ca_01 = ca, auroc = auc_res$auroc
+        )
+      }
+      pi = rbindlist(lst)
+      pi[, boot_id := iters[k]]
+      per_iter[[k]] = pi
+    }
+    big = rbindlist(per_iter)
+    wide = dcast(big, boot_id + score_name ~ ca_01, value.var = "auroc")
+    setnames(wide, c("0", "1"), c("auroc_nc", "auroc_ca"), skip_absent = TRUE)
+    wide[, diff := auroc_ca - auroc_nc]
+    out = wide[, .(
+      diff       = median(diff, na.rm = TRUE),
+      diff_lower = quantile(diff, 0.025, na.rm = TRUE, names = FALSE),
+      diff_upper = quantile(diff, 0.975, na.rm = TRUE, names = FALSE)
+    ), by = score_name]
+    out[, row_key := "h24_bootstrap"]
+    return(out[, .(score_name, row_key, diff, diff_lower, diff_upper)])
+  }
+  
+  message("    boot_h24_raw columns: ", paste(nms, collapse = ", "))
+  message("    -> structure not recognized; skipping bootstrap row.")
+  data.table()
+}
+
+if (exists("boot_h24_raw") && nrow(boot_h24_raw) > 0) {
+  sf7_h24b = compute_boot_h24(boot_h24_raw)
+  if (nrow(sf7_h24b) > 0) {
+    message("  24h bootstrap diff computed for ", nrow(sf7_h24b), " scores.")
+  }
+} else {
+  message("  boot_h24_raw not available; skipping bootstrap row.")
+}
+
+## Combine all rows and build the figure ------------------------------------
+
+sf7_all = rbindlist(list(sf7_sens, sf7_h24n, sf7_h24b),
+                    use.names = TRUE, fill = TRUE)
+
+# Belt-and-suspenders: normalize score_name before format_score() so any
+# variant that slipped through with a "_total" suffix (or casing quirk)
+# still matches the canonical score levels. Without this, unmatched names
+# produce an NA facet on the plot.
+sf7_all[, score_name := tolower(str_remove(score_name, "_total$"))]
+
+# Row ordering (bottom to top after coord_flip): sensitivity variants, then
+# 24h naive, then 24h bootstrap. Factor levels set so the main row is at
+# the bottom and bootstrap at the top.
+sf7_row_order = c(
+  names(sf7_variant_labels),
+  "h24_naive",
+  "h24_bootstrap"
+)
+sf7_row_labels = c(
+  sf7_variant_labels,
+  h24_naive     = sf7_h24_naive_label,
+  h24_bootstrap = sf7_h24_boot_label
+)
+
+sf7_all[, `:=`(
+  score_label = format_score(score_name),
+  row_label   = factor(row_key, levels = sf7_row_order, labels = sf7_row_labels[sf7_row_order]),
+  row_group   = fcase(
+    row_key %in% names(sf7_variant_labels), "Sensitivity analyses",
+    row_key == "h24_naive",                 "24-hour horizon",
+    row_key == "h24_bootstrap",             "24-hour horizon",
+    default = NA_character_
+  )
+)]
+
+# Guard against any remaining unrecognized score_name values that would
+# otherwise create an NA facet. Report them explicitly instead of silently
+# letting them fall out.
+sf7_bad = sf7_all[is.na(score_label)]
+if (nrow(sf7_bad) > 0) {
+  message("  WARNING: dropping ", nrow(sf7_bad),
+          " sf7 rows with unrecognized score_name: ",
+          paste(unique(sf7_bad$score_name), collapse = ", "))
+  sf7_all = sf7_all[!is.na(score_label)]
+}
+
+sf7 = ggplot(sf7_all,
+             aes(x = row_label, y = diff,
+                 ymin = diff_lower, ymax = diff_upper)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  # Error bars: suppress for the naive 24h row (assumes independence of
+  # repeated observations and therefore produces misleadingly-tight CIs).
+  # The bootstrap row is the honest uncertainty estimate for that horizon.
+  geom_errorbar(
+    data = function(d) d[row_key != "h24_naive"],
+    width = 0.25, linewidth = 0.5, color = "gray25"
+  ) +
+  geom_point(size = 2.5, color = "gray25") +
+  facet_wrap(~score_label, nrow = 1) +
+  scale_y_continuous(
+    limits = c(-0.10, 0.06),
+    breaks = seq(-0.10, 0.06, 0.04),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  coord_flip() +
+  labs(
+    x = NULL, y = "AUROC Difference (Cancer − Non-Cancer)",
+    caption = "Positive values indicate higher discrimination in cancer patients.\nThe 24-hour naive row omits a CI because treating repeated observations as independent produces misleadingly tight uncertainty; the clustered bootstrap row reports the honest CI for that horizon."
+  ) +
+  theme_ews() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    plot.caption       = element_text(hjust = 0.5, size = 9,
+                                      face = "italic", color = "gray40")
+  )
+
+ggsave(here("output", "figures", "figure_s07_auroc_gap_robustness.pdf"),
+       sf7, width = 14, height = 6)
+
+# ==============================================================================
+# SUPP FIGURE 3: Score co-positivity (mirrored UpSet-style)
 # ==============================================================================
 
-message("\n== Building Supp Figure 4 (co-positivity UpSet) ==")
+message("\n== Building Supp Figure 3 (co-positivity UpSet) ==")
 
 score_cols = c("sirs", "qsofa", "mews", "mews_sf", "news")
 
@@ -826,14 +1029,14 @@ combo_order = upset_plot_data |>
 upset_plot_data = upset_plot_data |>
   fmutate(combo_label = factor(combo_label, levels = rev(combo_order)))
 
-sf8_pal = build_cohort_palette(levels(upset_plot_data$cohort_label))
+sf3_pal = build_cohort_palette(levels(upset_plot_data$cohort_label))
 
 ## bar plot -------------------------------------------------------------------
 
 p_bars = ggplot(upset_plot_data, aes(x = combo_label, y = n_mirror, fill = cohort_label)) +
   geom_bar(stat = "identity", width = 0.7) +
   geom_hline(yintercept = 0, linewidth = 0.3) +
-  scale_fill_manual(values = sf8_pal, name = "Cohort") +
+  scale_fill_manual(values = sf3_pal, name = "Cohort") +
   scale_y_continuous(labels = function(x) scales::comma(abs(x)), breaks = scales::pretty_breaks(n = 6)) +
   coord_flip() +
   labs(x = NULL, y = "Number of Encounters", title = "Score Co-Positivity Patterns") +
@@ -888,13 +1091,13 @@ if (nrow(matrix_lines) > 0) {
     )
 }
 
-sf8 = p_matrix + p_bars + plot_layout(widths = c(1, 3))
+sf3 = p_matrix + p_bars + plot_layout(widths = c(1, 3))
 
-ggsave(here("output", "figures", "figure_s04_upset_mirrored.pdf"),
-       sf8, width = 10, height = 8)
+ggsave(here("output", "figures", "figure_s03_copositivity.pdf"),
+       sf3, width = 10, height = 8)
 
 # ==============================================================================
-# SUPP FIGURE 5: Component contributions to score positivity (dumbbell)
+# SUPP FIGURE 4: Component contributions to score positivity (dumbbell)
 # ==============================================================================
 #
 # For each score, the percentage of first-positive encounters in which a given
@@ -907,7 +1110,7 @@ ggsave(here("output", "figures", "figure_s04_upset_mirrored.pdf"),
 # include the component. SpO2 (NEWS) and SpO2/FiO2 (MEWS-SF) are collapsed
 # into a single "Oxygenation" row since no score uses both.
 
-message("\n== Building Supp Figure 5 (component contributions) ==")
+message("\n== Building Supp Figure 4 (component contributions) ==")
 
 ## pooled percentages across outcomes -----------------------------------------
 # upset_comp_final is stratified by o_primary_01; pool by summing numerators
@@ -1037,46 +1240,158 @@ sfC = ggplot(sfC_plot, aes(x = pct, y = component_lab)) +
   ) +
   labs(x = "% of score-positive encounters", y = NULL)
 
-ggsave(here("output", "figures", "figure_s05_component_contributions.pdf"),
+ggsave(here("output", "figures", "figure_s04_components.pdf"),
        sfC, width = 18, height = 5)
 
 # ==============================================================================
-# SUPP FIGURE 6: AUROC comparison (main analysis)
+# SUPP FIGURE 5: Threshold performance characteristics
 # ==============================================================================
 #
-# Moved from main-text Figure 3. Pooled AUROCs for the primary composite
-# outcome at each score, by cohort, with meta-analyzed 95% CIs on the logit
-# scale.
+# 5 x 4 grid: scores as rows, performance measures (sens, spec, PPV, NPV) as
+# columns. Each small panel has two lines (cancer vs non-cancer) across the
+# integer threshold range for that score. The grid structure absorbs the
+# complexity: row scans show how one score's four measures trade off across
+# thresholds; column scans show how the cancer/non-cancer gap behaves for
+# the same measure across all five scores (the NPV column, in particular,
+# makes the "negative screens mean less in oncology" point visually).
+#
+# Data source: sweep_final from 04_threshold_equivalence.R, which already
+# carries sens/spec/ppv/alert_rate (and sufficient components for NPV) across
+# every integer threshold, with Wilson CIs. For NEWS, thresholds here reflect
+# the aggregate-score-only rule; the field-conventional aggregate-plus-any3
+# rule used for Table 2 cannot be swept as an integer threshold and is
+# noted in the caption.
 
-message("\n== Building Supp Figure 6 (AUROC main) ==")
+message("\n== Building Supp Figure 5 (threshold performance grid) ==")
 
-sfAUC_data = auroc_results_final |>
-  fsubset(analysis == "main" & metric == "Encounter max") |>
+## Data prep: derive NPV from sweep counts, reshape to long ------------------
+# sweep_final has tp/fp/tn/fn at every integer threshold per score per cohort,
+# which lets us compute NPV alongside the sens/spec/ppv already present.
+
+sf5_data = sweep_final |>
   fmutate(
-    score_label  = format_score(score_name),
-    cohort_label = format_cohort(ca_01, COHORT_N)
+    npv = fifelse((tn + fn) > 0, tn / (tn + fn), NA_real_)
+  ) |>
+  fselect(score_name, ca_01, threshold, sens, spec, ppv, npv,
+          sens_lo, sens_hi, spec_lo, spec_hi, ppv_lo, ppv_hi) |>
+  as.data.table()
+
+# Wilson CI for NPV (not carried in sweep_final by default)
+sf5_npv_ci = sweep_final[, {
+  ci = wilson_ci(tn, tn + fn)
+  .(threshold, score_name, ca_01, npv_lo = ci$lo, npv_hi = ci$hi)
+}]
+# wilson_ci is defined in 04_threshold_equivalence.R; if not in scope, a local
+# fallback is added below.
+if (!exists("wilson_ci")) {
+  wilson_ci = function(x, n, conf = 0.95) {
+    z = qnorm(1 - (1 - conf) / 2)
+    p = fifelse(n > 0, x / n, NA_real_)
+    denom  = 1 + z^2 / n
+    center = (p + z^2 / (2 * n)) / denom
+    halfw  = (z / denom) * sqrt(p * (1 - p) / n + z^2 / (4 * n^2))
+    list(lo = pmax(0, center - halfw), hi = pmin(1, center + halfw))
+  }
+  sf5_npv_ci = sweep_final[, {
+    ci = wilson_ci(tn, tn + fn)
+    .(threshold, score_name, ca_01, npv_lo = ci$lo, npv_hi = ci$hi)
+  }]
+}
+
+sf5_data = merge(
+  sf5_data, sf5_npv_ci,
+  by = c("threshold", "score_name", "ca_01"),
+  all.x = TRUE
+)
+
+# Pivot to long: one row per (score, cohort, threshold, measure).
+sf5_long = sf5_data |>
+  pivot_longer(
+    cols = c(sens, spec, ppv, npv),
+    names_to = "measure", values_to = "value"
+  ) |>
+  as.data.table()
+
+sf5_ci_long = rbindlist(list(
+  sf5_data[, .(score_name, ca_01, threshold,
+               measure = "sens", lo = sens_lo, hi = sens_hi)],
+  sf5_data[, .(score_name, ca_01, threshold,
+               measure = "spec", lo = spec_lo, hi = spec_hi)],
+  sf5_data[, .(score_name, ca_01, threshold,
+               measure = "ppv",  lo = ppv_lo,  hi = ppv_hi)],
+  sf5_data[, .(score_name, ca_01, threshold,
+               measure = "npv",  lo = npv_lo,  hi = npv_hi)]
+))
+
+sf5_long = merge(sf5_long, sf5_ci_long,
+                 by = c("score_name", "ca_01", "threshold", "measure"),
+                 all.x = TRUE)
+
+# Drop degenerate endpoint rows where the measure is undefined (e.g., PPV
+# when no encounters are threshold-positive). Keep threshold = 0 for NPV
+# and sens even if the value equals 1 — these anchor the left edge of
+# the curve honestly.
+sf5_long = sf5_long[!is.na(value) & is.finite(value)]
+
+# Labels and ordering
+sf5_long[, `:=`(
+  score_lab   = format_score(score_name),
+  cohort_lab  = format_cohort(ca_01, COHORT_N),
+  measure_lab = factor(measure,
+                       levels = c("sens", "spec", "ppv", "npv"),
+                       labels = c("Sensitivity", "Specificity",
+                                  "Positive predictive value",
+                                  "Negative predictive value"))
+)]
+
+# Belt-and-suspenders: drop any rows with unmatched score_name (shouldn't
+# happen since sweep_final comes from cleaned maxscores_ca_raw, but keep
+# the defensive pattern for consistency with sf7).
+sf5_long = sf5_long[!is.na(score_lab)]
+
+sf5_pal = build_cohort_palette(levels(sf5_long$cohort_lab))
+
+## Plot: facet_grid with scores as rows, measures as columns -----------------
+# free_x per score lets SIRS (0-4) and NEWS (0-14) each use their own range.
+# y-axis fixed to 0-1 for all measures since they're all proportions.
+
+sf5 = ggplot(sf5_long,
+             aes(x = threshold, y = value,
+                 color = cohort_lab, fill = cohort_lab)) +
+  geom_ribbon(aes(ymin = lo, ymax = hi),
+              alpha = 0.18, color = NA) +
+  geom_line(linewidth = 0.55) +
+  geom_point(size = 0.9) +
+  facet_grid(score_lab ~ measure_lab, scales = "free_x", switch = "y") +
+  scale_color_manual(values = sf5_pal, name = "Cohort") +
+  scale_fill_manual(values = sf5_pal,  guide = "none") +
+  scale_y_continuous(labels = label_percent(), limits = c(0, 1),
+                     breaks = seq(0, 1, 0.25)) +
+  scale_x_continuous(breaks = function(x) seq(floor(x[1]), ceiling(x[2]), by = 1L)) +
+  labs(
+    x = "Threshold (positive if score ≥ value)",
+    y = NULL,
+    caption = paste(
+      "Shaded bands are 95% Wilson confidence intervals.",
+      "For NEWS, the sweep uses the aggregate-score threshold only;",
+      "the field-conventional \"any single parameter ≥3\" rule cannot",
+      "be varied as an integer threshold and is not reflected here."
+    )
+  ) +
+  theme_ews() +
+  theme(
+    legend.position  = "top",
+    strip.text.y     = element_text(face = "bold", size = 10, angle = 0),
+    strip.text.x     = element_text(face = "bold", size = 10),
+    strip.placement  = "outside",
+    panel.spacing.x  = unit(0.7, "lines"),
+    panel.spacing.y  = unit(0.5, "lines"),
+    plot.caption     = element_text(hjust = 0, size = 9,
+                                    face = "italic", color = "gray40")
   )
 
-sfAUC_pal = build_cohort_palette(levels(sfAUC_data$cohort_label))
-
-sfAUC = ggplot(sfAUC_data, aes(x = score_label, y = auroc, fill = cohort_label)) +
-  geom_errorbar(
-    aes(ymin = ci_lower, ymax = ci_upper),
-    width = 0.2, linewidth = 0.5, color = "black",
-    position = position_dodge(width = 0.6)
-  ) +
-  geom_point(
-    shape = 21, color = "black", size = 4, stroke = 0.7,
-    position = position_dodge(width = 0.6)
-  ) +
-  scale_fill_manual(values = sfAUC_pal, name = "Cohort") +
-  scale_y_continuous(limits = c(0.58, 0.85), breaks = seq(0.60, 0.85, 0.05)) +
-  labs(x = NULL, y = "AUROC (95% CI)") +
-  theme_ews() +
-  theme(legend.position = "top", axis.text.x = element_text(face = "bold", size = 11))
-
-ggsave(here("output", "figures", "figure_s06_auroc_main.pdf"),
-       sfAUC, width = 7, height = 5)
+ggsave(here("output", "figures", "figure_s05_threshold_performance.pdf"),
+       sf5, width = 14, height = 11)
 
 # ==============================================================================
 # DONE
