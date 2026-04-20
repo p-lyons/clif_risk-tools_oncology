@@ -1328,10 +1328,80 @@ sf5_long = merge(sf5_long, sf5_ci_long,
                  all.x = TRUE)
 
 # Drop degenerate endpoint rows where the measure is undefined (e.g., PPV
-# when no encounters are threshold-positive). Keep threshold = 0 for NPV
-# and sens even if the value equals 1 — these anchor the left edge of
-# the curve honestly.
-sf5_long = sf5_long[!is.na(value) & is.finite(value)]
+# when no encounters are threshold-positive). Keep threshold = 0 as the
+# pure-maxima/minima anchor: sens = 100%, spec = 0%, PPV = prevalence,
+# NPV = undefined (imputed to 1 below). These anchor the left edge of
+# each curve honestly.
+sf5_long = sf5_long[!is.na(value) & is.finite(value) |
+                      (threshold == 0L & measure == "npv")]
+
+# NPV is mathematically undefined at threshold = 0 (no encounters
+# classified as negative means 0/0); impute to 1 so the line connects
+# to the left edge rather than leaving a gap. The confidence interval
+# is set to NA since it cannot be computed from zero counts.
+sf5_long[measure == "npv" & threshold == 0L & is.na(value),
+         `:=`(value = 1, lo = NA_real_, hi = NA_real_)]
+
+# Restrict to thresholds that actually occur in the data, AND where there
+# are enough encounters above the threshold in BOTH cohorts to produce
+# stable estimates. Without this, the tail of NEWS (thresholds 15-17+)
+# renders with 3-10 encounters per cohort and Wilson CIs balloon; the
+# resulting "non-monotonicity" in sensitivity is actually sampling noise
+# from vanishing denominators, not a real signal.
+#
+# The filter uses n_pos (threshold-positive count) rather than raw n
+# because that is the denominator that matters for sens/PPV stability.
+# We require n_pos >= 50 in each cohort AT each threshold; thresholds
+# that fail this in either cohort are trimmed from both so the curves
+# remain comparable.
+
+MIN_N_POS_PER_COHORT = 50L
+
+sf5_n_pos = sweep_final[, .(score_name, ca_01, threshold, n_pos)]
+sf5_n_pos_wide = dcast(sf5_n_pos, score_name + threshold ~ ca_01,
+                       value.var = "n_pos")
+setnames(sf5_n_pos_wide, c("0", "1"), c("n_pos_nc", "n_pos_ca"),
+         skip_absent = TRUE)
+sf5_n_pos_wide[, keep := !is.na(n_pos_nc) & !is.na(n_pos_ca) &
+                 (n_pos_nc >= MIN_N_POS_PER_COHORT) &
+                 (n_pos_ca >= MIN_N_POS_PER_COHORT)]
+
+# Always keep threshold = 0 even if n_pos is zero-by-definition there.
+sf5_n_pos_wide[threshold == 0L, keep := TRUE]
+
+sf5_keep_map = sf5_n_pos_wide[keep == TRUE, .(score_name, threshold)]
+sf5_long = merge(sf5_long, sf5_keep_map,
+                 by = c("score_name", "threshold"))
+
+# Drop NPV points where the "negative" class is too small to produce a
+# meaningful estimate. At low thresholds, specificity near 0 means
+# almost every encounter is still classified as positive, leaving a
+# sliver of encounters in the negative class -- NPV is then dominated
+# by whether those few happen to include a deteriorator, and can
+# produce misleading dips (e.g., MEWS at threshold 1) that are sampling
+# artifacts rather than real predictive behavior. Require specificity
+# >= 1% to include an NPV point.
+#
+# Threshold = 0 is exempted because NPV there is imputed to 1 and
+# anchors the left edge of the curve by convention.
+sf5_long = sf5_long[!(measure == "npv" &
+                        threshold > 0L &
+                        !is.na(spec_hi) & spec_hi < 0.01)]
+
+# Diagnostic: report PPV at threshold 0 vs observed outcome prevalence.
+# These should match (PPV at t=0 is prevalence by construction). If they
+# don't, something upstream is wrong.
+sf5_ppv_at_0 = sf5_long[measure == "ppv" & threshold == 0L,
+                        .(score_name, ca_01, ppv_at_0 = value)]
+sf5_prevalence = sweep_final[threshold == 0L,
+                             .(score_name, ca_01,
+                               prev = n_events / n_total)]
+sf5_check = merge(sf5_ppv_at_0, sf5_prevalence,
+                  by = c("score_name", "ca_01"))
+message("  PPV at threshold 0 vs cohort prevalence (should match):")
+print(sf5_check[, .(score_name, ca_01,
+                    ppv_at_0 = round(ppv_at_0, 3),
+                    prev     = round(prev,     3))])
 
 # Labels and ordering
 sf5_long[, `:=`(
@@ -1370,7 +1440,14 @@ sf5 = ggplot(sf5_long,
   scale_fill_manual(values = sf5_pal,  guide = "none") +
   scale_y_continuous(labels = label_percent(), limits = c(0, 1),
                      breaks = seq(0, 1, 0.25)) +
-  scale_x_continuous(breaks = function(x) seq(floor(x[1]), ceiling(x[2]), by = 1L)) +
+  scale_x_continuous(breaks = function(x) {
+    # Every integer when the range is small (SIRS, QSOFA); every other
+    # integer when the range is larger (MEWS, MEWS-SF, NEWS) to avoid
+    # label crowding within each score's panel width.
+    rng = ceiling(x[2]) - floor(x[1])
+    step = if (rng <= 6L) 1L else 2L
+    seq(floor(x[1]), ceiling(x[2]), by = step)
+  }) +
   labs(
     x = "Threshold (positive if score ≥ value)",
     y = NULL,
