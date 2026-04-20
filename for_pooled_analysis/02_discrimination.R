@@ -10,6 +10,9 @@
 library(WeightedROC)
 library(metafor)
 library(pROC)
+library(flextable)
+library(officer)
+library(here)
 
 # ==============================================================================
 # HELPER FUNCTIONS
@@ -466,7 +469,7 @@ auroc_diff[, `:=`(
 
 message("\n== Creating summary tables ==")
 
-## Main analysis table ---------------------------------------------------------
+## Main analysis table (wide: one row per score) -------------------------------
 
 auroc_main_table = auroc_primary[analysis == "main", .(
   metric_lab, score_lab, ca_lab,
@@ -482,18 +485,64 @@ auroc_main_wide = dcast(
 )
 
 ## Difference table ------------------------------------------------------------
+##
+## Reports the cancer vs non-cancer AUROC gap with a continuous p-value, no
+## significance threshold applied. See eMethods for rationale: the random-
+## effects meta-analysis SE is dominated by between-site heterogeneity, and a
+## dichotomous significance threshold would under-credit the directional
+## consistency across the five scores.
 
 auroc_diff_table = auroc_diff[analysis == "main", .(
   metric_lab, score_lab,
   diff_fmt = sprintf("%.3f", diff_auc),
-  p_fmt    = fifelse(!is.na(p_value) & p_value < 0.001, "<0.001", 
-                     fifelse(!is.na(p_value), sprintf("%.3f", p_value), "—")),
-  sig
+  p_fmt    = fifelse(!is.na(p_value) & p_value < 0.001, "<0.001",
+                     fifelse(!is.na(p_value), sprintf("%.3f", p_value), "—"))
 )]
+
+## Publishable Table: AUROC by cohort with difference and p-value --------------
+##
+## Main-text table combining per-cohort AUROCs (with 95% CIs) and the cancer
+## vs non-cancer difference with p-value. Restricted to encounter-level
+## ("Encounter max"); the 24-hour horizon row is shown in eFigure 7 alongside
+## the clustered-bootstrap robustness analysis.
+
+auroc_pub_table = merge(
+  auroc_main_wide[metric_lab == "Encounter max"],
+  auroc_diff_table[metric_lab == "Encounter max"],
+  by = c("metric_lab", "score_lab"),
+  all.x = TRUE
+)
+
+auroc_pub_table[, metric_lab := NULL]
+
+setcolorder(auroc_pub_table,
+            c("score_lab", "Non-cancer", "Cancer", "diff_fmt", "p_fmt"))
+
+setnames(auroc_pub_table,
+         old = c("score_lab", "diff_fmt",             "p_fmt"),
+         new = c("Score",     "Cancer - Non-cancer",  "P value"))
+
+message("  Publishable AUROC table: ", nrow(auroc_pub_table), " rows")
+
+ft_auroc = flextable(auroc_pub_table) |>
+  autofit() |>
+  align(j = 2:5, align = "center", part = "all") |>
+  bold(part = "header")
+
+if (exists("today")) {
+  auroc_path = here("output", "tables",
+                    paste0("table_auroc_", today, ".docx"))
+} else {
+  auroc_path = here("output", "tables", "table_auroc.docx")
+}
+
+save_as_docx(ft_auroc, path = auroc_path)
+message("  Saved: ", auroc_path)
 
 # ==============================================================================
 # EXPORTS
 # ==============================================================================
+
 
 message("\n== Discrimination analysis complete ==")
 
@@ -534,6 +583,7 @@ auroc_comparison_final = auroc_comparison
 auroc_diff_final       = auroc_diff
 auroc_main_table_final = auroc_main_wide
 auroc_diff_table_final = auroc_diff_table
+auroc_pub_table_final  = auroc_pub_table
 
 # Also export site-level data for forest plots
 if (exists("auroc_enc_raw")) auroc_site_enc = auroc_enc_raw
