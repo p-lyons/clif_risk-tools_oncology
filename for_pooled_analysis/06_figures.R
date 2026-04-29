@@ -332,22 +332,20 @@ fig3_std = fig3_data[is_std == TRUE & score_name != "news"]
 # Do not hardcode from the manuscript; source from the computed object to
 # keep figure and table in lockstep.
 #
-# Expected upstream object: `news_fc_operating_final` with columns
+# Expected upstream object: `news_fc_operating` with columns
 #   ca_01 (0 = non-cancer, 1 = cancer), sens, alert_rate
-# Built in 04_meta.R from sesp_raw, which carries the field-conventional
-# NEWS positivity rule. If your upstream object is named differently,
-# adjust the line below.
+# If your upstream object is named differently, adjust the line below.
 
-if (!exists("news_fc_operating_final")) {
+if (!exists("news_fc_operating")) {
   stop(
-    "Figure 3 requires an upstream object `news_fc_operating_final` with NEWS ",
+    "Figure 3 requires an upstream object `news_fc_operating` with NEWS ",
     "field-conventional (aggregate>=5 OR any parameter>=3) sensitivity and ",
-    "alert_rate by cohort (ca_01 in 0/1). This should be built in 04_meta.R ",
-    "by pooling site_ops across sites for score_name == 'news'."
+    "alert_rate by cohort (ca_01 in 0/1). Produce this in 01_tables.R or ",
+    "04_threshold_equivalence.R alongside the Table 2 NEWS computation."
   )
 }
 
-fig3_news_fc = news_fc_operating_final |>
+fig3_news_fc = news_fc_operating |>
   fmutate(
     score_name = "news",
     score_lab  = factor("NEWS", levels = levels(fig3_data$score_lab)),
@@ -525,11 +523,26 @@ ggsave(here("output", "figures", "figure_s02_score_distributions.pdf"),
        sf2, width = 16, height = 7)
 
 # ==============================================================================
-# SUPP FIGURE 6 (Panel A): Site-level AUROC caterpillar
+# SUPP FIGURE 6 (Panel A): Forest plot of per-site AUROC differences
 # ==============================================================================
 # Prepared here; combined with Panel B (heme/solid) below into sf6.
+#
+# Design rationale: an earlier version of this panel plotted absolute
+# site-level AUROCs (one row per hospital, two cohort points per row,
+# faceted by score). That layout invited the reader to compare sites to
+# one another, which is not the paper's claim. Here we plot, for each
+# score, the site-level AUROC difference (cancer minus non-cancer) with
+# 95% CIs, plus the pooled random-effects estimate as a diamond. The
+# figure directly shows what the paper actually claims: that the
+# cancer-vs-noncancer gap is directionally consistent across sites and
+# is not driven by outlier hospitals.
+#
+# Pooled estimates come from auroc_diff_final (built in 02_discrimination.R
+# via logit-scale random-effects meta-analysis), keeping the pooled diamond
+# aligned with Table 2's reported cancer-vs-noncancer difference rather
+# than recomputing from sf6a_aurocs' site-level counts.
 
-message("\n== Building Supp Figure 6 Panel A (site-level AUROCs) ==")
+message("\n== Building Supp Figure 6 Panel A (AUROC-difference forest) ==")
 
 sf6a_prep = maxscores_ca_raw |>
   fsubset(analysis == "main") |>
@@ -555,95 +568,108 @@ for (i in seq_len(nrow(sf6a_combos))) {
     ca_01      = ca,
     auroc      = auc_res$auroc,
     se         = auc_res$se,
-    ci_lower   = auc_res$ci_lower,
-    ci_upper   = auc_res$ci_upper,
     n_events   = auc_res$n_events,
     n_total    = auc_res$n_total,
     stringsAsFactors = FALSE
   )
 }
-sf6a_aurocs = do.call(rbind, sf6a_list)
+sf6a_aurocs = do.call(rbind, sf6a_list) |> as_tidytable()
 
-site_order = sf6a_aurocs |>
-  as_tidytable() |>
-  fsubset(score_name == "news" & ca_01 == 0) |>
-  arrange(auroc) |>
-  pull(site)
+# Compute per-site cancer-minus-noncancer AUROC differences with propagated
+# SE. Each site contributes one row per score; sites with missing estimates
+# in either cohort are dropped from the plot.
 
-if (exists("SITE_N")) {
-  site_labels  = setNames(
-    sprintf("%s (n=%s)", LETTERS[seq_along(site_order)], format(SITE_N[site_order], big.mark = ",")),
-    site_order
-  )
-  pooled_label = sprintf("Pooled (n=%s)", format(sum(SITE_N), big.mark = ","))
-} else {
-  site_labels  = setNames(LETTERS[seq_along(site_order)], site_order)
-  pooled_label = "Pooled"
-}
+sf6a_ca = sf6a_aurocs |> fsubset(ca_01 == 1L) |>
+  fmutate(auroc_ca = auroc, se_ca = se) |>
+  fselect(site, score_name, auroc_ca, se_ca)
 
-sf6a_pooled_prep = sf6a_prep |>
-  as_tidytable() |>
-  fgroup_by(score_name, ca_01, value, outcome) |>
-  fsummarise(n = fsum(n)) |>
-  fungroup() |>
-  as.data.frame()
+sf6a_nc = sf6a_aurocs |> fsubset(ca_01 == 0L) |>
+  fmutate(auroc_nc = auroc, se_nc = se) |>
+  fselect(site, score_name, auroc_nc, se_nc)
 
-sf6a_pooled_combos = unique(sf6a_pooled_prep[, c("score_name", "ca_01")])
-
-sf6a_pooled_list = vector("list", nrow(sf6a_pooled_combos))
-for (i in seq_len(nrow(sf6a_pooled_combos))) {
-  sc = sf6a_pooled_combos$score_name[i]
-  ca = sf6a_pooled_combos$ca_01[i]
-  d  = sf6a_pooled_prep[sf6a_pooled_prep$score_name == sc & sf6a_pooled_prep$ca_01 == ca, ,
-                        drop = FALSE]
-  auc_res = as.data.frame(calc_auroc_from_counts(d))
-  sf6a_pooled_list[[i]] = data.frame(
-    site       = "pooled",
-    score_name = sc,
-    ca_01      = ca,
-    auroc      = auc_res$auroc,
-    se         = auc_res$se,
-    ci_lower   = auc_res$ci_lower,
-    ci_upper   = auc_res$ci_upper,
-    n_events   = auc_res$n_events,
-    n_total    = auc_res$n_total,
-    stringsAsFactors = FALSE
-  )
-}
-sf6a_pooled = do.call(rbind, sf6a_pooled_list)
-
-sf6a_all = rbind(sf6a_aurocs, sf6a_pooled) |>
-  as_tidytable() |>
+sf6a_site_diff = merge(sf6a_ca, sf6a_nc, by = c("site", "score_name"),
+                       all.x = TRUE) |>
   fmutate(
-    score_label  = format_score(score_name),
-    cohort_label = format_cohort(ca_01, COHORT_N),
-    site_label   = fifelse(site == "pooled", pooled_label, site_labels[site]),
-    site_label   = factor(site_label, levels = c(pooled_label, site_labels[site_order])),
-    is_pooled    = site == "pooled"
-  )
+    diff      = auroc_ca - auroc_nc,
+    se_diff   = sqrt(se_ca^2 + se_nc^2),
+    ci_lower  = diff - 1.96 * se_diff,
+    ci_upper  = diff + 1.96 * se_diff,
+    is_pooled = FALSE
+  ) |>
+  fsubset(!is.na(diff) & !is.na(se_diff) & is.finite(se_diff)) |>
+  fselect(site, score_name, diff, se_diff, ci_lower, ci_upper, is_pooled)
 
-sf6a_pal = build_cohort_palette(levels(sf6a_all$cohort_label))
+# Pooled estimates: pull from auroc_diff_final, the random-effects
+# meta-analysis output. Use encounter-level main analysis.
+sf6a_pooled_diff = auroc_diff_final |>
+  as_tidytable() |>
+  fsubset(analysis == "main" & metric == "Encounter max") |>
+  fmutate(
+    site      = "pooled",
+    diff      = diff_auc,
+    ci_lower  = diff_auc - 1.96 * se_diff,
+    ci_upper  = diff_auc + 1.96 * se_diff,
+    is_pooled = TRUE
+  ) |>
+  fselect(site, score_name, diff, se_diff, ci_lower, ci_upper, is_pooled)
 
-sf6a = ggplot(sf6a_all, aes(x = site_label, y = auroc, color = cohort_label)) +
-  geom_hline(
-    data = sf6a_all |> fsubset(is_pooled),
-    aes(yintercept = auroc, color = cohort_label),
-    linetype = "dashed", linewidth = 0.4, alpha = 0.5
+sf6a_all = rbind(sf6a_site_diff, sf6a_pooled_diff) |>
+  fmutate(score_label = format_score(score_name))
+
+# Order scores on the y-axis by descending pooled gap magnitude (most-negative
+# diff at top so the largest cancer-vs-noncancer gap reads first).
+sf6a_score_order = sf6a_pooled_diff |>
+  arrange(diff) |>
+  pull(score_name)
+
+sf6a_all[, score_label := factor(
+  format_score(score_name),
+  levels = format_score(sf6a_score_order)
+)]
+
+# One row per score. Site-level points are jittered vertically within each
+# score row for readability; the pooled diamond sits at the score's y-anchor.
+sf6a_all[, y_pos := as.numeric(score_label)]
+set.seed(20260421)
+sf6a_all[is_pooled == FALSE, y_pos := y_pos + runif(.N, -0.18, 0.18)]
+
+sf6a = ggplot(sf6a_all, aes(x = diff, y = y_pos)) +
+  geom_vline(xintercept = 0, color = "gray70", linetype = "dashed", linewidth = 0.4) +
+  geom_errorbarh(
+    data = sf6a_all[is_pooled == FALSE],
+    aes(xmin = ci_lower, xmax = ci_upper),
+    height = 0, color = "gray65", linewidth = 0.3, alpha = 0.7
   ) +
-  geom_errorbar(
-    aes(ymin = ci_lower, ymax = ci_upper),
-    width = 0.3, linewidth = 0.5,
-    position = position_dodge(width = 0.6)
+  geom_point(
+    data = sf6a_all[is_pooled == FALSE],
+    color = "gray45", fill = "gray81", shape = 21, size = 1.8, stroke = 0.3
   ) +
-  geom_point(aes(shape = is_pooled), size = 2.5, position = position_dodge(width = 0.6)) +
-  facet_wrap(~score_label, nrow = 1) +
-  scale_color_manual(values = sf6a_pal, name = "Cohort") +
-  scale_shape_manual(values = c("FALSE" = 16, "TRUE" = 18), guide = "none") +
-  scale_y_continuous(limits = c(0.60, 0.90), breaks = seq(0.60, 0.90, 0.05)) +
-  coord_flip() +
-  labs(x = NULL, y = NULL) +
+  geom_errorbarh(
+    data = sf6a_all[is_pooled == TRUE],
+    aes(xmin = ci_lower, xmax = ci_upper),
+    height = 0, color = "black", linewidth = 0.7
+  ) +
+  geom_point(
+    data = sf6a_all[is_pooled == TRUE],
+    color = "black", fill = "black", shape = 23, size = 3.2, stroke = 0.5
+  ) +
+  scale_y_continuous(
+    breaks = seq_along(levels(sf6a_all$score_label)),
+    labels = levels(sf6a_all$score_label),
+    expand = expansion(add = 0.5)
+  ) +
+  scale_x_continuous(
+    limits = c(-0.10, 0.10),
+    breaks = seq(-0.10, 0.10, 0.05),
+    labels = function(x) sprintf("%+.2f", x)
+  ) +
+  labs(x = "AUROC difference (cancer - non-cancer)", y = NULL) +
   theme_ews() +
-  theme(legend.position = "top", panel.grid.major.y = element_blank())
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor   = element_blank(),
+    axis.text.y        = element_text(face = "bold")
+  )
 
 # ==============================================================================
 # SUPP FIGURE 6 (Panel B): Hematologic vs solid tumor AUROC comparison
@@ -686,7 +712,7 @@ sf6b_data = liquid_aurocs_final |>
   as_tidytable() |>
   fmutate(
     score_label = format_score(score_name),
-    cancer_type = factor(cancer_type, levels = c("Non-Cancer", "Solid", "Hematologic"))
+    cancer_type = factor(cancer_type, levels = c("Hematologic", "Solid", "Non-Cancer"))
   )
 
 # Palette: Non-Cancer blue matches Panel A; Solid/Hematologic pair with warm
@@ -704,28 +730,25 @@ sf6b = ggplot(sf6b_data, aes(x = cancer_type, y = auroc, color = cancer_type)) +
   geom_point(size = 2.5) +
   facet_wrap(~score_label, nrow = 1) +
   scale_color_manual(values = sf6b_pal, name = "Cancer type") +
-  scale_y_continuous(limits = c(0.60, 0.90), breaks = seq(0.60, 0.90, 0.05)) +
+  scale_y_continuous(limits = c(0.65, 0.85), breaks = seq(0.65, 0.85, 0.05)) +
   coord_flip() +
   labs(x = NULL, y = "AUROC (95% CI)") +
   theme_ews() +
   theme(legend.position = "top", panel.grid.major.y = element_blank())
 
-## Assemble Supp Figure 6: Panel A (site) / Panel B (heme-solid) -------------
-# Panel A needs more vertical space (9 rows per facet) than Panel B (3 rows
-# per facet). Use relative heights 3:1 to reflect this. Strip labels on
-# Panel A only; Panel B reuses the same facet columns so strips are dropped
-# for compactness.
+## Assemble Supp Figure 6: Panel A (site differences) / Panel B (heme-solid)
+# Panel A is now a single-panel forest plot with one row per score; Panel B
+# is a 5-facet strip. Use equal vertical heights since both panels convey a
+# compact horizontal strip of estimates rather than a dense grid. Keep
+# Panel B's facet strips visible since the new Panel A doesn't share facets.
 
-sf6b_nostrip = sf6b + theme(strip.text = element_blank(),
-                            strip.background = element_blank())
-
-sf6 = (sf6a / sf6b_nostrip) +
-  plot_layout(heights = c(3, 1)) +
+sf6 = (sf6a / sf6b) +
+  plot_layout(heights = c(1, 1)) +
   plot_annotation(tag_levels = "A",
                   theme = theme(plot.tag = element_text(face = "bold", size = 12)))
 
 ggsave(here("output", "figures", "figure_s06_auroc_heterogeneity.pdf"),
-       sf6, width = 14, height = 8)
+       sf6, width = 11, height = 7)
 
 # ==============================================================================
 # SUPP FIGURE 7: Robustness of the cancer-noncancer AUROC gap
