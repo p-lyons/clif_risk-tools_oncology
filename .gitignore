@@ -36,3 +36,4 @@ config/
 # Ignore renv cache
 renv/cache/*
 renv/library
+upload_to_box_v2/

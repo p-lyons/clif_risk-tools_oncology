@@ -11,6 +11,10 @@ if (!dir.exists(paste0(project_location, "/upload_to_box"))) {
   dir.create(paste0(project_location, "/upload_to_box"), recursive = TRUE)
 }
 
+if (!dir.exists(paste0(project_location, "/upload_to_box_v2"))) {
+  dir.create(paste0(project_location, "/upload_to_box_v2"), recursive = TRUE)
+}
+
 if (!dir.exists(paste0(project_location, "/proj_tables"))) {
   dir.create(paste0(project_location, "/proj_tables"), recursive = TRUE)
 }
@@ -749,16 +753,53 @@ hospice =
 
 ## outcomes data frame ---------------------------------------------------------
 
-df_outcomes = 
+### event-level frame (one row per encounter with >= 1 event) ------------------
+
+outcome_events = 
   rowbind(icu, death, hospice) |>
   pivot_wider(
     names_from   = event,
     values_from  = event_dttm,
     names_prefix = "time_"
-  ) |>
-  fmutate(end_enc              = pmin(time_death, time_hospice, na.rm = T)) |>
-  fmutate(outcome_dttm         = pmin(time_icu,   end_enc,      na.rm = T)) |>
-  fmutate(outcome_nohospc_dttm = pmin(time_icu,   time_death,   na.rm = T)) |>
+  )
+
+### guarantee that all three event columns exist -------------------------------
+# pivot_wider() drops an event type entirely when a site records none of it,
+# which breaks the pmin() calls below. Creating the column as all-missing leaves
+# every value unchanged at sites that do record the event.
+
+time_cols_all  = c("time_icu", "time_death", "time_hospice")
+time_cols_have = intersect(time_cols_all, names(outcome_events))
+time_cols_miss = setdiff(time_cols_all,   names(outcome_events))
+
+if (length(time_cols_have) == 0) {
+  stop("No ICU, death, or hospice events found; cannot build the outcome frame.", call. = FALSE)
+}
+
+if (length(time_cols_miss) > 0) {
+  
+  outcome_events = as.data.table(outcome_events)
+  na_dttm_vec    = outcome_events[[time_cols_have[1]]]
+  na_dttm_vec[]  = NA
+  
+  for (mc in time_cols_miss) {
+    data.table::set(outcome_events, j = mc, value = na_dttm_vec)
+  }
+  
+  outcome_events = as_tidytable(outcome_events)
+  
+  message(
+    sprintf("Note: no %s event(s) at this site; time column(s) created as missing.",
+            paste(str_remove(time_cols_miss, "^time_"), collapse = ", "))
+  )
+}
+
+### round-one composite fields (definitions unchanged) -------------------------
+
+outcome_events = 
+  fmutate(outcome_events, end_enc = pmin(time_death, time_hospice, na.rm = T)) |>
+  fmutate(outcome_dttm         = pmin(time_icu, end_enc,    na.rm = T)) |>
+  fmutate(outcome_nohospc_dttm = pmin(time_icu, time_death, na.rm = T)) |>
   fmutate(
     outcome_cat = case_when(
       outcome_dttm == time_icu     ~ "icu",
@@ -767,15 +808,182 @@ df_outcomes =
       TRUE                         ~ "problem"
     )
   ) |>
-  select(joined_hosp_id, starts_with("outcome"))
+  fselect(
+    joined_hosp_id,
+    time_icu,
+    time_death,
+    time_hospice,
+    outcome_dttm,
+    outcome_nohospc_dttm,
+    outcome_cat
+  )
+
+### expand to one row per cohort encounter -------------------------------------
+# Round-two change, and a deliberate one. Through round one this file held only
+# encounters with at least one of ICU transfer, death, or hospice discharge. It
+# now holds every encounter in the final cohort, because the file is the source
+# of the o_*_01 indicators and 02_scores.R attaches it with a LEFT join. Without
+# the full spine, those indicators would arrive missing rather than zero for
+# event-free encounters, which would silently remove those encounters from the
+# hospice-decomposition denominators. Spine-only rows carry missing times and a
+# missing outcome_cat, so the "problem" level of outcome_cat remains a genuine
+# error sentinel rather than the routine label for an event-free encounter.
+
+df_outcomes = 
+  fselect(cohort, joined_hosp_id) |>
+  funique() |>
+  join(outcome_events, how = "left", multiple = FALSE)
+
+### per-outcome event and censoring times --------------------------------------
+# The universe of competing events is {icu, death, hospice}. For outcome k with
+# event set E_k and complement C_k, let t_e be the earliest time in E_k and t_c
+# the earliest time in C_k. Then
+#
+#   event_k_dttm  = t_e when t_e is present and strictly precedes t_c
+#                   (an absent t_c never blocks the event; this covers the
+#                    composite, whose complement is structurally empty)
+#   censor_k_dttm = t_c when t_c is present and strictly precedes t_e
+#                   (an absent t_e never blocks the censoring; this is what
+#                    censors, say, a ward death in the ward-to-ICU outcome)
+#   o_k_01        = 1 when event_k_dttm is present
+#
+# Both rules are strict, so an exact tie leaves event and censoring times both
+# missing. That is what makes the QC assertion below (never both present) true
+# by construction. Ties are counted and reported rather than passed over.
+
+tie_counts = integer(0)
+
+#### composite: events = icu, death, hospice | complement = none ---------------
+
+t_e    = pmin(df_outcomes$time_icu, df_outcomes$time_death, df_outcomes$time_hospice, na.rm = TRUE)
+t_c    = copy(t_e)
+t_c[]  = NA
+keep_e = !is.na(t_e) & (is.na(t_c) | t_e < t_c)
+keep_c = !is.na(t_c) & (is.na(t_e) | t_c < t_e)
+n_ties = sum(!is.na(t_e) & !is.na(t_c) & t_e == t_c)
+
+t_e[!keep_e] = NA
+t_c[!keep_c] = NA
+
+df_outcomes$event_composite_dttm  = t_e
+df_outcomes$censor_composite_dttm = t_c
+df_outcomes$o_composite_01        = as.integer(!is.na(t_e))
+tie_counts["composite"]           = n_ties
+
+#### nohospice: events = icu, death | complement = hospice ---------------------
+
+t_e    = pmin(df_outcomes$time_icu, df_outcomes$time_death, na.rm = TRUE)
+t_c    = copy(df_outcomes$time_hospice)
+keep_e = !is.na(t_e) & (is.na(t_c) | t_e < t_c)
+keep_c = !is.na(t_c) & (is.na(t_e) | t_c < t_e)
+n_ties = sum(!is.na(t_e) & !is.na(t_c) & t_e == t_c)
+
+t_e[!keep_e] = NA
+t_c[!keep_c] = NA
+
+df_outcomes$event_nohospice_dttm  = t_e
+df_outcomes$censor_nohospice_dttm = t_c
+df_outcomes$o_nohospice_01        = as.integer(!is.na(t_e))
+tie_counts["nohospice"]           = n_ties
+
+#### wardicu: events = icu | complement = death, hospice -----------------------
+
+t_e    = copy(df_outcomes$time_icu)
+t_c    = pmin(df_outcomes$time_death, df_outcomes$time_hospice, na.rm = TRUE)
+keep_e = !is.na(t_e) & (is.na(t_c) | t_e < t_c)
+keep_c = !is.na(t_c) & (is.na(t_e) | t_c < t_e)
+n_ties = sum(!is.na(t_e) & !is.na(t_c) & t_e == t_c)
+
+t_e[!keep_e] = NA
+t_c[!keep_c] = NA
+
+df_outcomes$event_wardicu_dttm  = t_e
+df_outcomes$censor_wardicu_dttm = t_c
+df_outcomes$o_wardicu_01        = as.integer(!is.na(t_e))
+tie_counts["wardicu"]           = n_ties
+
+#### warddeath: events = death | complement = icu, hospice ---------------------
+
+t_e    = copy(df_outcomes$time_death)
+t_c    = pmin(df_outcomes$time_icu, df_outcomes$time_hospice, na.rm = TRUE)
+keep_e = !is.na(t_e) & (is.na(t_c) | t_e < t_c)
+keep_c = !is.na(t_c) & (is.na(t_e) | t_c < t_e)
+n_ties = sum(!is.na(t_e) & !is.na(t_c) & t_e == t_c)
+
+t_e[!keep_e] = NA
+t_c[!keep_c] = NA
+
+df_outcomes$event_warddeath_dttm  = t_e
+df_outcomes$censor_warddeath_dttm = t_c
+df_outcomes$o_warddeath_01        = as.integer(!is.na(t_e))
+tie_counts["warddeath"]           = n_ties
+
+#### hospicedc: events = hospice | complement = icu, death ---------------------
+
+t_e    = copy(df_outcomes$time_hospice)
+t_c    = pmin(df_outcomes$time_icu, df_outcomes$time_death, na.rm = TRUE)
+keep_e = !is.na(t_e) & (is.na(t_c) | t_e < t_c)
+keep_c = !is.na(t_c) & (is.na(t_e) | t_c < t_e)
+n_ties = sum(!is.na(t_e) & !is.na(t_c) & t_e == t_c)
+
+t_e[!keep_e] = NA
+t_c[!keep_c] = NA
+
+df_outcomes$event_hospicedc_dttm  = t_e
+df_outcomes$censor_hospicedc_dttm = t_c
+df_outcomes$o_hospicedc_01        = as.integer(!is.na(t_e))
+tie_counts["hospicedc"]           = n_ties
+
+## quality control on outcome times --------------------------------------------
+
+### the composite must reproduce the round-one outcome_dttm rate exactly -------
+
+qc_composite_ref = as.integer(!is.na(df_outcomes$outcome_dttm))
+
+if (!identical(df_outcomes$o_composite_01, qc_composite_ref)) {
+  stop(
+    sprintf("o_composite_01 disagrees with outcome_dttm for %d encounter(s).",
+            sum(df_outcomes$o_composite_01 != qc_composite_ref)),
+    call. = FALSE
+  )
+}
+
+### event and censoring times must never both be present -----------------------
+
+outcome_keys = c("composite", "nohospice", "wardicu", "warddeath", "hospicedc")
+
+for (k in outcome_keys) {
+  
+  n_both = sum(
+    !is.na(df_outcomes[[paste0("event_",  k, "_dttm")]]) &
+    !is.na(df_outcomes[[paste0("censor_", k, "_dttm")]])
+  )
+  
+  if (n_both > 0) {
+    stop(
+      sprintf("Outcome '%s' has %d encounter(s) carrying both an event and a censoring time.",
+              k, n_both),
+      call. = FALSE
+    )
+  }
+}
+
+message(
+  sprintf("✅ Outcome times QC passed | %s encounters | exact ties: %s",
+          format(nrow(df_outcomes), big.mark = ","),
+          paste(sprintf("%s=%d", names(tie_counts), tie_counts), collapse = ", "))
+)
 
 fwrite(df_outcomes, here("proj_tables", "outcome_times.csv"))
 
 ward_icu_tx = 
-  fsubset(df_outcomes, outcome_cat == "icu") |>
+  fsubset(df_outcomes, !is.na(outcome_cat) & outcome_cat == "icu") |>
   pull(joined_hosp_id)
 
-rm(death, hospice, icu); gc()
+rm(death, hospice, icu, outcome_events)
+rm(t_e, t_c, keep_e, keep_c, n_ties, tie_counts, qc_composite_ref, outcome_keys, k, n_both)
+rm(time_cols_all, time_cols_have, time_cols_miss)
+suppressWarnings(rm(na_dttm_vec, mc)); gc()
 
 # other care processes --------------------------------------------------------#
 
@@ -880,6 +1088,19 @@ cohort =
   fmutate(va_01      = if_else(joined_hosp_id %in% va_encs,      1L, 0L, 0L)) |>
   fmutate(d_noicu_01 = if_else(dead_01 == 1    & icu_01 != 1, 1L, 0L, 0L)) |>
   fmutate(h_noicu_01 = if_else(hospice_01 == 1 & icu_01 != 1, 1L, 0L, 0L)) |>
+  # Metastatic flag, restricted to solid tumors on purpose. liquid_01_enc is
+  # assigned by fmax() across every cancer code on the encounter rather than by
+  # the diagnosis hierarchy, so a hematologic encounter can also carry a C77-C80
+  # code; leaving those encounters missing keeps the flag interpretable as a
+  # solid-tumor stage contrast. rank_enc: 1 metastatic, 2 hematologic, 3
+  # high-risk solid (C22/C25/C34), 4 other solid (C18/C50/C61), 5 other.
+  fmutate(
+    mets_01 = case_when(
+      rank_enc == 1L & liquid_01 == 0L                 ~ 1L,
+      ca_01 == 1L & liquid_01 == 0L & rank_enc != 1L   ~ 0L,
+      TRUE                                             ~ NA_integer_
+    )
+  ) |>
   select(
     patient_id, 
     joined_hosp_id, 
@@ -890,18 +1111,43 @@ cohort =
     race_category, 
     ethnicity_category, 
     ends_with("01"),
+    rank_enc,
     initial_code_status,
     los_hosp_d,
     starts_with("miss")
-  ) |>
-  mutate(across(
+  )
+
+## mets_01 is deliberately three-valued (1 / 0 / missing), so it is held out of
+## the sweep that fills missing binary flags with zero.
+
+fill_01_cols = setdiff(grep("01$", names(cohort), value = TRUE), "mets_01")
+
+cohort = 
+  mutate(cohort, across(
     .cols = ends_with("category"),
     .fns  = ~if_else(is.na(.x), "unknown", tolower(.x))
   )) |> 
   mutate(across(
-    .cols = ends_with("01"),
+    .cols = all_of(fill_01_cols),
     .fns  = ~if_else(is.na(.x), 0L, .x)
   ))
+
+## quality control on the metastatic flag --------------------------------------
+
+qc_mets_noca  = sum(cohort$ca_01 == 0 & !is.na(cohort$mets_01))
+qc_mets_solid = sum(cohort$ca_01 == 1 & cohort$liquid_01 == 0 & is.na(cohort$mets_01))
+
+if (qc_mets_noca > 0 || qc_mets_solid > 0) {
+  stop(
+    sprintf("mets_01 failed QC: %d non-cancer encounter(s) non-missing, %d solid-tumor encounter(s) missing.",
+            qc_mets_noca, qc_mets_solid),
+    call. = FALSE
+  )
+}
+
+message("✅ mets_01 QC passed.")
+
+rm(fill_01_cols, qc_mets_noca, qc_mets_solid)
 
 ## add elixhauser --------------------------------------------------------------
 
@@ -1104,7 +1350,10 @@ los_cat =
 
 t2_cat = 
   fsubset(cohort, ed_admit_01 == 1) |>
-  select(-ends_with("id"), -ends_with("dttm"),  -age, -vw, -los_hosp_d) |>
+  # rank_enc and mets_01 are held out so that table_02_cat stays identical to
+  # the round-one artifact; both are carried in cohort.parquet instead.
+  select(-ends_with("id"), -ends_with("dttm"),  -age, -vw, -los_hosp_d,
+         -rank_enc, -mets_01) |>
   pivot_longer(-ca_01, names_to = "var", values_to = "val") |>
   fsubset(!is.na(val)) |>
   fmutate(n = val) |>
@@ -1128,6 +1377,120 @@ if (sum(t2_cont$n) != nrow(cohort[ed_admit_01 == 1])) {
 
 fwrite(t2_cat,  here("upload_to_box", paste0("table_02_cat_",  site_lowercase, ".csv")))
 fwrite(t2_cont, here("upload_to_box", paste0("table_02_cont_", site_lowercase, ".csv")))
+
+# admission diagnosis (reason for admission) -----------------------------------
+# Round-two export. Three-character ICD-10-CM stems are exported unmapped; the
+# coordinating center maps them to CCSR centrally, which avoids distributing a
+# crosswalk to eight sites. Denominators are recoverable from table_02_cont,
+# whose n by ca_01 is the same ed_admit_01 == 1 sample used here.
+
+## does this site populate diagnosis_primary? ----------------------------------
+# 00_setup.R does not validate diagnosis_primary, so a site can reach this point
+# without it. A descriptive add-on should not halt the primary analysis, so an
+# absent or never-positive field yields header-only artifacts and a message.
+
+has_dx_primary = "diagnosis_primary" %in% names(data_list$hospital_diagnosis)
+
+if (!has_dx_primary) {
+  
+  message("Note: hospital_diagnosis has no diagnosis_primary column; admission-diagnosis artifacts will be empty.")
+  
+  adm_dx_raw = tidytable(
+    hospitalization_id = hid_jid_crosswalk$hospitalization_id[0],
+    diagnosis_code     = character(0)
+  )
+  
+} else {
+  
+  adm_dx_raw = 
+    dplyr::filter(data_list$hospital_diagnosis, hospitalization_id %in% cohort_hids) |>
+    dplyr::filter(toupper(diagnosis_code_format) == "ICD10CM") |>
+    dplyr::select(hospitalization_id, diagnosis_code, diagnosis_primary) |>
+    dplyr::collect()
+  
+  ### diagnosis_primary arrives as integer, logical, or character across sites
+  adm_dx_raw = 
+    ftransform(adm_dx_raw, dx_primary_int = suppressWarnings(as.integer(diagnosis_primary))) |>
+    fsubset(!is.na(dx_primary_int) & dx_primary_int == 1L) |>
+    fselect(hospitalization_id, diagnosis_code) |>
+    distinct()
+  
+  if (nrow(adm_dx_raw) == 0) {
+    message("Note: no rows with diagnosis_primary == 1; admission-diagnosis artifacts will be empty.")
+  }
+}
+
+## first primary code per linked encounter -------------------------------------
+# A joined_hosp_id can span several source hospitalizations, each with its own
+# primary code. The script's established rule for collapsing constituents is to
+# order by time and take the first (see the cohort assembly and hospital_id
+# blocks above), so the primary code of the earliest constituent admission wins,
+# with ascending code as the deterministic tie-break.
+
+hosp_order = 
+  dplyr::filter(data_list$hospitalization, hospitalization_id %in% cohort_hids) |>
+  dplyr::select(hospitalization_id, admission_dttm) |>
+  dplyr::collect() |>
+  distinct()
+
+adm_dx_first = 
+  join(adm_dx_raw, hid_jid_crosswalk, how = "inner", multiple = TRUE) |>
+  join(hosp_order, how = "inner", multiple = FALSE) |>
+  ftransform(code_clean = toupper(str_remove_all(diagnosis_code, "[^A-Za-z0-9]"))) |>
+  fsubset(str_detect(code_clean, "^[A-Z]")) |>
+  roworder(admission_dttm, code_clean) |>
+  fgroup_by(joined_hosp_id) |>
+  fsummarize(code_clean = ffirst(code_clean))
+
+## attach cancer status and derive chapter letter and code stem ----------------
+
+adm_dx_enc = 
+  fsubset(cohort, ed_admit_01 == 1) |>
+  fselect(joined_hosp_id, ca_01) |>
+  join(adm_dx_first, how = "inner", multiple = FALSE) |>
+  ftransform(chapter   = substr(code_clean, 1, 1)) |>
+  ftransform(code_stem = substr(code_clean, 1, 3))
+
+## tally at both levels, suppressing cells of five or fewer --------------------
+
+adm_dx_chapter = 
+  fselect(adm_dx_enc, ca_01, chapter, joined_hosp_id) |>
+  fgroup_by(ca_01, chapter) |>
+  fnobs() |>
+  fselect(ca_01, chapter, n = joined_hosp_id) |>
+  fsubset(n > 5) |>
+  roworder(ca_01, -n, chapter) |>
+  ftransform(site = site_lowercase)
+
+adm_dx_stem = 
+  fselect(adm_dx_enc, ca_01, code_stem, joined_hosp_id) |>
+  fgroup_by(ca_01, code_stem) |>
+  fnobs() |>
+  fselect(ca_01, code_stem, n = joined_hosp_id) |>
+  fsubset(n > 5) |>
+  roworder(ca_01, -n, code_stem) |>
+  ftransform(site = site_lowercase)
+
+fwrite(
+  adm_dx_chapter,
+  here("upload_to_box_v2", paste0("admission_dx_chapter-ca-", site_lowercase, ".csv"))
+)
+
+fwrite(
+  adm_dx_stem,
+  here("upload_to_box_v2", paste0("admission_dx_stem-ca-", site_lowercase, ".csv"))
+)
+
+message(
+  sprintf("✅ Admission diagnoses | %s of %s encounters coded | %d chapters | %d stems",
+          format(nrow(adm_dx_enc), big.mark = ","),
+          format(sum(cohort$ed_admit_01 == 1), big.mark = ","),
+          nrow(adm_dx_chapter),
+          nrow(adm_dx_stem))
+)
+
+rm(has_dx_primary, adm_dx_raw, hosp_order, adm_dx_first, adm_dx_enc,
+   adm_dx_chapter, adm_dx_stem); gc()
 
 # final cleanup ----------------------------------------------------------------
 
