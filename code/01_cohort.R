@@ -3,20 +3,16 @@
 
 # check/create output directories ---------------------------------------------
 
-if (!exists("project_location")) {
-  stop("project_location not found. Did you run 00_setup first?", call. = FALSE)
+if (!exists("BOX_DIR")) {
+  stop("BOX_DIR not found. Did you run 00_setup first?", call. = FALSE)
 }
 
-if (!dir.exists(paste0(project_location, "/upload_to_box"))) {
-  dir.create(paste0(project_location, "/upload_to_box"), recursive = TRUE)
+if (!dir.exists(here(BOX_DIR))) {
+  dir.create(here(BOX_DIR), recursive = TRUE)
 }
 
-if (!dir.exists(paste0(project_location, "/upload_to_box_v2"))) {
-  dir.create(paste0(project_location, "/upload_to_box_v2"), recursive = TRUE)
-}
-
-if (!dir.exists(paste0(project_location, "/proj_tables"))) {
-  dir.create(paste0(project_location, "/proj_tables"), recursive = TRUE)
+if (!dir.exists(here("proj_tables"))) {
+  dir.create(here("proj_tables"), recursive = TRUE)
 }
 
 # resources for RAM heavy wrangling --------------------------------------------
@@ -424,7 +420,7 @@ cancer_code_tally_primary =
 
 fwrite(
   cancer_code_tally_primary,
-  here("upload_to_box", paste0("cancer_codes_primary_", site_lowercase, ".csv"))
+  here(BOX_DIR, paste0("cancer_codes_primary_", site_lowercase, ".csv"))
 )
 
 ### tally for inclusion flow diagram -------------------------------------------
@@ -604,7 +600,7 @@ flow_df = tidytable(
   n_excluded_no,
 ) 
 
-fwrite(flow_df, here("upload_to_box", paste0("figure_s01_flow_", site_lowercase, ".csv")))
+fwrite(flow_df, here(BOX_DIR, paste0("figure_s01_flow_", site_lowercase, ".csv")))
 
 rm(flow_df, step_labels, n_remaining_ca, n_remaining_no, n_excluded_ca, n_excluded_no)
 gc()
@@ -1268,7 +1264,7 @@ miss_summary =
     site        = site_lowercase
   )
 
-fwrite(miss_summary, here("upload_to_box", paste0("missing_demog_", site_lowercase, ".csv")))
+fwrite(miss_summary, here(BOX_DIR, paste0("missing_demog_", site_lowercase, ".csv")))
 
 cohort = 
   select(cohort, -starts_with("miss_")) |>
@@ -1375,8 +1371,8 @@ if (sum(t2_cont$n) != nrow(cohort[ed_admit_01 == 1])) {
 
 ## export table 2 --------------------------------------------------------------
 
-fwrite(t2_cat,  here("upload_to_box", paste0("table_02_cat_",  site_lowercase, ".csv")))
-fwrite(t2_cont, here("upload_to_box", paste0("table_02_cont_", site_lowercase, ".csv")))
+fwrite(t2_cat,  here(BOX_DIR, paste0("table_02_cat_",  site_lowercase, ".csv")))
+fwrite(t2_cont, here(BOX_DIR, paste0("table_02_cont_", site_lowercase, ".csv")))
 
 # admission diagnosis (reason for admission) -----------------------------------
 # Round-two export. Three-character ICD-10-CM stems are exported unmapped; the
@@ -1473,12 +1469,12 @@ adm_dx_stem =
 
 fwrite(
   adm_dx_chapter,
-  here("upload_to_box_v2", paste0("admission_dx_chapter-ca-", site_lowercase, ".csv"))
+  here(BOX_DIR, paste0("admission_dx_chapter-ca-", site_lowercase, ".csv"))
 )
 
 fwrite(
   adm_dx_stem,
-  here("upload_to_box_v2", paste0("admission_dx_stem-ca-", site_lowercase, ".csv"))
+  here(BOX_DIR, paste0("admission_dx_stem-ca-", site_lowercase, ".csv"))
 )
 
 message(
@@ -1495,6 +1491,7 @@ rm(has_dx_primary, adm_dx_raw, hosp_order, adm_dx_first, adm_dx_enc,
 # final cleanup ----------------------------------------------------------------
 
 keep = c(
+  "BOX_DIR",
   "data_list",
   "site_lowercase",
   "cohort",

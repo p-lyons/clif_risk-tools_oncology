@@ -132,6 +132,14 @@ file_type        = tolower(config$file_type)
 tables_location  = config$clif_data_location # here("../_clif_data/v_2.1") 
 project_location = config$project_location
 
+### artifact destination -------------------------------------------------------
+# Single constant governing where every site-level artifact is written, by any
+# script in the pipeline. Round one wrote to upload_to_box/; round two writes the
+# complete set to upload_to_box_v2/ so the submitted artifacts stay frozen in
+# place. Changing rounds means changing this one line.
+
+BOX_DIR = "upload_to_box_v2"
+
 ### site_name must be a valid clif site in lowercase ---------------------------
 
 if (!(site_lowercase %in% allowed_sites)) {
@@ -165,11 +173,14 @@ if (!(file_type %in% allowed_files)) {
 
 ### file locations -------------------------------------------------------------
 
-if (!dir.exists(paste0(project_location, "/proj_tables"))) {
-  dir.create(paste0(project_location, "/proj_tables"))
+# Resolved with here() rather than project_location so that directory creation
+# and every subsequent write agree on one root.
+
+if (!dir.exists(here("proj_tables"))) {
+  dir.create(here("proj_tables"), recursive = TRUE)
 }
-if (!dir.exists(paste0(project_location, "/upload_to_box"))) {
-  dir.create(paste0(project_location, "/upload_to_box"))
+if (!dir.exists(here(BOX_DIR))) {
+  dir.create(here(BOX_DIR), recursive = TRUE)
 }
 
 ### dates ----------------------------------------------------------------------

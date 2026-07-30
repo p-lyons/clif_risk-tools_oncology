@@ -1,3 +1,7 @@
+if (!exists("BOX_DIR")) {
+  stop("BOX_DIR not found. Did you run 00_setup first?", call. = FALSE)
+}
+
 scores = read_parquet(here("proj_tables", "scores_full.parquet"))
 cohort = read_parquet(here("proj_tables", "cohort.parquet"))
 
@@ -9,12 +13,12 @@ if (!exists("site_lowercase")) {
 # Remove existing artifacts to prevent duplicates from old naming conventions
 # Only cleans subdirectories (main/, threshold/, etc.) - not root-level files
 
-cleanup_artifact_dirs = function(root = "upload_to_box") {
+cleanup_artifact_dirs = function(root = BOX_DIR) {
   
   subdirs = c("main", "threshold", "sensitivity", "horizon", "diagnostics", "meta")
   
   for (subdir in subdirs) {
-    dir_path = file.path(root, subdir)
+    dir_path = here(root, subdir)
     if (dir.exists(dir_path)) {
       old_files = list.files(dir_path, pattern = "\\.csv$", full.names = TRUE)
       if (length(old_files) > 0) {
@@ -172,11 +176,11 @@ compute_site_auroc = function(dt, score_col = "value", site_lowercase) {
 
 write_artifact = function(df, analysis, artifact, site,
                           strata = NULL, horizon = NULL, variant = NULL,
-                          root = "upload_to_box") {
+                          root = BOX_DIR) {
   
   stopifnot(analysis %in% names(.allowed), artifact %in% .allowed[[analysis]])
   
-  dir = file.path(root, analysis)
+  dir = here(root, analysis)
   if (!dir.exists(dir)) dir.create(dir, recursive = TRUE, showWarnings = FALSE)
   
   fn   = .build_filename(artifact, site, strata, horizon, variant)
@@ -1183,4 +1187,4 @@ suppressWarnings(rm(dt_long, dt_max, dt_max_main, dt_max_liquid, counts, counts_
 rm(scores_long_base, scores_long_cancer, cuminc_data)
 gc()
 
-message("Files written to: ", normalizePath(file.path("upload_to_box")))
+message("Files written to: ", here(BOX_DIR))
