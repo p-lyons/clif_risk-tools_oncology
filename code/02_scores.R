@@ -1,6 +1,10 @@
 # create risk scores by looping over vital sign and lab components
 # process one vital/lab at a time, assign all relevant scores, then combine
 
+if (!exists("BOX_DIR")) {
+  stop("BOX_DIR not found. Did you run 00_setup first?", call. = FALSE)
+}
+
 # extract vital signs and assign score points ----------------------------------
 
 ## make a list of data frames for each vital sign ------------------------------
@@ -344,7 +348,7 @@ miss_vitals_labs = tidytable(
     site        = site_lowercase
   )
 
-fwrite(miss_vitals_labs,here("upload_to_box", paste0("missing_vlab_", site_lowercase, ".csv")))
+fwrite(miss_vitals_labs, here(BOX_DIR, paste0("missing_vlab_", site_lowercase, ".csv")))
 
 rm(has_hr, has_rr, has_temp, has_spo2, has_gcs, has_wbc, miss_vitals_labs)
 
@@ -491,7 +495,7 @@ saveRDS(site_lowercase, here("proj_tables", "site_lowercase.rds"))
 
 rm(list = setdiff(
   ls(),
-  c("start_time", "run_log", "site_lowercase", "here", ".n_score_rows")
+  c("BOX_DIR", "start_time", "run_log", "site_lowercase", "here", ".n_score_rows")
 ))
 
 gc()

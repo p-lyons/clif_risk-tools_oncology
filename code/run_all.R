@@ -40,6 +40,6 @@ report = tidytable(
 )
 
 print(report)
-fwrite(report, here("upload_to_box", paste0("run_report_", site_lowercase, ".csv")))
+fwrite(report, here(BOX_DIR, paste0("run_report_", site_lowercase, ".csv")))
 
 message("Pipeline completed in ", round(run_log$total_minutes, 1), " minutes")
