@@ -48,7 +48,7 @@ vitals_list$temp_c =
 
 ## heart rate (sirs, mews, news) -----------------------------------------------
 
-vitals_list$heart_rate = 
+vitals_list$heart_rate =
   vitals_list[["heart_rate"]] |>
   ftransform(
     sirs_hr = if_else(val > 90, 1L, 0L),
@@ -126,14 +126,14 @@ vitals_list$sbp =
 
 ## gcs (qsofa) -----------------------------------------------------------------
 
-vitals_list$gcs = 
+vitals_list$gcs =
   data_list[["patient_assessments"]] |>
   dplyr::filter(hospitalization_id %in% cohort_hids) |>
   dplyr::filter(assessment_category == "gcs_total") |>
   dplyr::filter(!is.na(numerical_value) & numerical_value <= 15) |>
   dplyr::select(
-    hospitalization_id, 
-    time = recorded_dttm, 
+    hospitalization_id,
+    time = recorded_dttm,
     numerical_value
   ) |>
   dplyr::collect() |>
@@ -150,7 +150,7 @@ vitals_list$gcs =
   ) |>
   fselect(-numerical_value)
 
-vitals_list$gcs = 
+vitals_list$gcs =
   join(vitals_list$gcs, hid_jid_crosswalk, how = "inner", multiple = T) |>
   fgroup_by(joined_hosp_id, time) |>
   fsummarize(
@@ -211,18 +211,18 @@ vitals_list$spo2 =
 
 ### prepare fio2 from respiratory table ----------------------------------------
 
-resp = 
+resp =
   data_list[["respiratory_support"]] |>
   dplyr::filter(hospitalization_id %in% cohort_hids) |>
   dplyr::select(
-    hospitalization_id, 
-    time = recorded_dttm, 
-    device_category, 
-    lpm_set, 
+    hospitalization_id,
+    time = recorded_dttm,
+    device_category,
+    lpm_set,
     fio2_set
   ) |>
   dplyr::filter(!is.na(lpm_set) | !is.na(fio2_set) | tolower(device_category) == "room air") |>
-  dplyr::collect() 
+  dplyr::collect()
 
 resp$fio2_impute = case_when(
   resp$lpm_set == 0 ~ 0.21,
@@ -239,31 +239,76 @@ resp$fio2 = case_when(
   TRUE                                         ~ resp$fio2_impute
 )
 
-resp = 
+### news2 supplemental-oxygen item: full-coverage stream -----------------------
+# NEWS2 adds a 2-point supplemental-oxygen item that the round-one NEWS build
+# omitted. It needs coverage of every encounter, so it is derived here from the
+# full respiratory_support extract -- before the keep_ids filter below that
+# restricts the SpO2/FiO2 (MEWS-SF) stream to encounters with an SpO2 value --
+# reusing the fio2 computed just above verbatim.
+#
+#   news_o2 = 2  when fio2 > 0.21 or lpm_set > 0        (any supplemental O2)
+#   news_o2 = 0  when room air, or (fio2 == 0.21 & lpm_set == 0)
+#   news_o2 = NA otherwise  (device category alone cannot resolve the item)
+#
+# o2_src records which branch resolved each measurement -- 1 fio2 > 0.21, 2
+# lpm_set > 0, 3 room air -- and is kept only for the resolution diagnostic.
+# Grid-fixed handling (confirmed with Brenna): this stream is carried onto the
+# existing score rows by a 6h as-of join later, rather than added as its own
+# vitals_list element. Keeping it out of the Reduce/full-join grid means no new
+# score-row timestamps are introduced, so SIRS, qSOFA, MEWS, and MEWS-SF rows
+# stay byte-identical to round one and only NEWS changes.
+
+news_o2_stream =
+  ftransform(
+    resp,
+    news_o2 = case_when(
+      fio2 > 0.21 | lpm_set > 0                     ~ 2L,
+      tolower(device_category) == "room air"        ~ 0L,
+      fio2 == 0.21 & lpm_set == 0                    ~ 0L,
+      TRUE                                          ~ NA_integer_
+    ),
+    o2_src = case_when(
+      fio2 > 0.21                                   ~ 1L,
+      lpm_set > 0                                    ~ 2L,
+      tolower(device_category) == "room air"        ~ 3L,
+      fio2 == 0.21 & lpm_set == 0                    ~ 3L,
+      TRUE                                          ~ NA_integer_
+    )
+  ) |>
+  fsubset(!is.na(news_o2)) |>
+  join(hid_jid_crosswalk, how = "inner", multiple = T) |>
+  fgroup_by(joined_hosp_id, time) |>
+  fsummarize(
+    news_o2 = fmax(news_o2),
+    o2_src  = fmin(o2_src)
+  ) |>
+  roworder(joined_hosp_id, time)
+
+resp =
   join(resp, hid_jid_crosswalk, how = "inner", multiple = T) |>
   fgroup_by(joined_hosp_id, time) |>
   fsummarize(fio2 = fmax(fio2)) |>
   roworder(joined_hosp_id, time)
 
 keep_ids = pull(vitals_list$spo2, joined_hosp_id)
-resp     = fsubset(resp, !is.na(fio2) & joined_hosp_id %in% keep_ids) 
+resp     = fsubset(resp, !is.na(fio2) & joined_hosp_id %in% keep_ids)
 
 ### sf based on 6h fio2 carryforward -------------------------------------------
 
-vitals_list$sf = 
+vitals_list$sf =
   fsubset(vitals_list$spo2, spo2 >= 0 & spo2 < 97) |>
   join(resp, how = "full", multiple = F) |>
   ftransform(tf = if_else(!is.na(fio2), time, as.POSIXct(NA))) |>
-  roworder(joined_hosp_id, time) |> 
+  roworder(joined_hosp_id, time) |>
   fill(tf,   .direction = "down", .by = joined_hosp_id) |>
-  fill(fio2, .direction = "down", .by = joined_hosp_id) |>  
+  fill(fio2, .direction = "down", .by = joined_hosp_id) |>
   ftransform(hdf = as.numeric(difftime(time, tf), units = "hours")) |>
   ftransform(f2  = if_else(hdf <= 6 & !is.na(hdf), fio2, NA_real_)) |>
   ftransform(sf  = spo2/f2)
 
 ### compute sf scores ----------------------------------------------------------
 
-vitals_list$sf = 
+vitals_list$sf =
   fsubset(vitals_list$sf, !is.na(spo2)) |>
   ftransform(
     mews_sf = case_when(
@@ -279,82 +324,39 @@ vitals_list$sf =
 
 req_labs = c("pco2_arterial", "wbc")
 
-labs = 
+labs =
   data_list[["labs"]] |>
   dplyr::filter(hospitalization_id %in% cohort_hids) |>
   dplyr::filter(lab_category %in% req_labs) |>
   dplyr::select(
-    hospitalization_id, 
-    time = lab_result_dttm, 
-    lab_category, 
+    hospitalization_id,
+    time = lab_result_dttm,
+    lab_category,
     lab_value_numeric
   ) |>
   dplyr::collect()
 
-labs = 
+labs =
   join(labs, hid_jid_crosswalk, how = "inner", multiple = T) |>
   fgroup_by(joined_hosp_id, time, lab_category) |>
   fsummarize(val = fmin(lab_value_numeric))
 
 ## wbc, pco2 (sirs) ------------------------------------------------------------
 
-labs = 
+labs =
   pivot_wider(labs, names_from = lab_category, values_from = val) |>
   ftransform(sirs_wbc = if_else(wbc < 4 | wbc > 12, 1L, 0L)) |>
   ftransform(sirs_co2 = if_else(pco2_arterial < 32, 1L, 0L)) |>
   select(joined_hosp_id, time, starts_with("sirs")) |>
   fsubset(!is.na(sirs_wbc) | !is.na(sirs_co2))
 
-# missingness characterization (encounter-level) -------------------------------
-
-message("\n== Characterizing encounter-level missingness for vitals/labs ==")
-
-## scope: ED admits only
-scope_encs = fsubset(cohort, ed_admit_01 == 1)$joined_hosp_id
-
-## check which encounters have ≥1 measurement of each type
-
-# vitals - just need joined_hosp_id presence in each list element
-has_hr   = funique(vitals_list$heart_rate$joined_hosp_id)
-has_rr   = funique(vitals_list$respiratory_rate$joined_hosp_id)
-has_temp = funique(vitals_list$temp_c$joined_hosp_id)
-has_spo2 = funique(vitals_list$spo2$joined_hosp_id)
-has_gcs  = funique(vitals_list$gcs$joined_hosp_id)
-
-# wbc - check labs before the pivot
-has_wbc = 
-  fsubset(labs, !is.na(sirs_wbc)) |>
-  fselect(joined_hosp_id) |>
-  funique() |>
-  tibble::deframe()
-
-## summarize
-n_total = length(scope_encs)
-
-miss_vitals_labs = tidytable(
-  variable  = c("heart_rate", "resp_rate", "temp", "spo2", "gcs", "wbc"),
-  n_total   = n_total,
-  n_missing = c(
-    sum(!scope_encs %in% has_hr),
-    sum(!scope_encs %in% has_rr),
-    sum(!scope_encs %in% has_temp),
-    sum(!scope_encs %in% has_spo2),
-    sum(!scope_encs %in% has_gcs),
-    sum(!scope_encs %in% has_wbc)
-  )
-) |>
-  ftransform(
-    pct_missing = round(100 * n_missing / n_total, 2),
-    site        = site_lowercase
-  )
-
-fwrite(miss_vitals_labs, here(BOX_DIR, paste0("missing_vlab_", site_lowercase, ".csv")))
-
-rm(has_hr, has_rr, has_temp, has_spo2, has_gcs, has_wbc, miss_vitals_labs)
+# NOTE: encounter-level vitals/lab missingness now lives in 02c_monitoring.R,
+# which reports it stratified by cancer status (missing_vlab-ca). The round-one
+# non-stratified missing_vlab export was removed here to complete that swap.
 
 # combine score components -----------------------------------------------------
 
-scores = 
+scores =
   Reduce(
     function(x, y) join(x, y,
                         on            = c("joined_hosp_id", "time"),
@@ -375,6 +377,59 @@ for (col in score_component_cols) {
   scores[is.infinite(get(col)), (col) := NA_integer_]
 }
 
+# persist intermediates for downstream sensitivity/monitoring scripts ----------
+# These are written here, before the extracts are dropped, so P3 and P4 do not
+# re-extract raw data.
+#
+#   scores_components.parquet  Point-assigned score components, one row per
+#                              encounter-time, BEFORE carry-forward, ward
+#                              restriction, and outcome truncation. P3
+#                              (02b_carryforward.R) re-runs the LOCF-plus-totals
+#                              stage on this at 2/6/12h; the cf6 pass must
+#                              reproduce this script's main output exactly.
+#   news_o2_stream.parquet     The supplemental-oxygen measurement stream BEFORE
+#                              the 6h carry, so P3 can reproduce the NEWS2 O2
+#                              item at each vitals window.
+#   vital_lab_extract.parquet  One row per (encounter, measure, measurement time)
+#                              for the six vitals and WBC, spanning the whole
+#                              encounter (not ward-restricted). P4
+#                              (02c_monitoring.R) counts distinct measurement
+#                              times per 24 ward-hours from this.
+#   ward_times.parquet         The ward-stay intervals, built in 01_cohort.R and
+#                              otherwise kept only in memory. P3 and P4 need it to
+#                              re-apply the ward restriction after their own
+#                              carry-forward / monitoring steps. Written here
+#                              exactly as this script consumes it: a superset of
+#                              the final cohort's intervals, intersected to cohort
+#                              encounters by the inner join on scores below.
+
+write_parquet(scores,         here("proj_tables", "scores_components.parquet"))
+write_parquet(news_o2_stream, here("proj_tables", "news_o2_stream.parquet"))
+write_parquet(ward_times,     here("proj_tables", "ward_times.parquet"))
+
+vital_lab_extract =
+  rowbind(
+    ftransform(fselect(vitals_list$heart_rate,       joined_hosp_id, time), measure = "heart_rate"),
+    ftransform(fselect(vitals_list$respiratory_rate, joined_hosp_id, time), measure = "respiratory_rate"),
+    ftransform(fselect(vitals_list$temp_c,           joined_hosp_id, time), measure = "temp_c"),
+    ftransform(fselect(vitals_list$sbp,              joined_hosp_id, time), measure = "sbp"),
+    ftransform(fselect(vitals_list$spo2,             joined_hosp_id, time), measure = "spo2"),
+    ftransform(fselect(vitals_list$gcs,              joined_hosp_id, time), measure = "gcs"),
+    ftransform(fselect(fsubset(labs, !is.na(sirs_wbc)), joined_hosp_id, time), measure = "wbc")
+  )
+
+write_parquet(vital_lab_extract, here("proj_tables", "vital_lab_extract.parquet"))
+
+message(
+  sprintf("✅ Intermediates written | components: %s | o2 stream: %s | extract: %s | ward_times: %s",
+          format(nrow(scores),            big.mark = ","),
+          format(nrow(news_o2_stream),    big.mark = ","),
+          format(nrow(vital_lab_extract), big.mark = ","),
+          format(nrow(ward_times),        big.mark = ","))
+)
+
+rm(vital_lab_extract)
+
 rm(resp, labs, vitals_list, get_each_vital); gc()
 
 # carryforward (vs 4h, labs 12h) -----------------------------------------------
@@ -388,12 +443,12 @@ vital_cols = setdiff(score_cols, lab_cols)
 ## function for LOCF within N hours for one column -----------------------------
 
 locf <- function(df, col, hours, id = "joined_hosp_id", tcol = "time") {
-  
+
   cy     <- as.difftime(hours, units = "hours")
   tstamp <- paste0("t__", col)
   is_int <- is.integer(df[[col]])
   na_val <- if (is_int) NA_integer_ else NA_real_
-  
+
   df |>
     arrange(!!sym(id), !!sym(tcol)) |>
     mutate(!!tstamp := if_else(!is.na(.data[[col]]), .data[[tcol]], as.POSIXct(NA_real_))) |>
@@ -409,10 +464,44 @@ locf <- function(df, col, hours, id = "joined_hosp_id", tcol = "time") {
     select(-!!sym(tstamp))
 }
 
-## run locf: vitals 4h, labs 12h -----------------------------------------------
+## run locf: vitals 6h, labs 12h -----------------------------------------------
 
 for (cn in vital_cols) scores = locf(scores, cn, hours = 6)
 for (cn in lab_cols)   scores = locf(scores, cn, hours = 12)
+
+## news2 O2 item: 6h as-of carry onto the fixed score grid ---------------------
+# Grid-fixed decision (confirmed with Brenna): news_o2 is deliberately NOT in
+# vital_cols above, so the score grid built by the Reduce/full-join is identical
+# to round one. Here the O2 stream is carried onto each existing score row by a
+# rolling last-observation-carried-forward join within the same 6h window used
+# for vitals; this roll join *is* the O2 item's LOCF. Because the stream spans
+# every respiratory_support timestamp (not just those that happen to coincide
+# with a score row), this also picks up O2 measured between score rows, which a
+# grid-only LOCF would miss. o2_meas_time records which measurement supplied the
+# value so the resolution diagnostic can separate a direct hit (measured at this
+# instant) from a carried-forward value.
+
+setDT(scores)
+setDT(news_o2_stream)
+news_o2_stream[, o2_meas_time := time]
+setkey(news_o2_stream, joined_hosp_id, time)
+
+roll_secs = 6 * 3600  # 6h, matching the vital-sign LOCF window
+
+scores = news_o2_stream[scores, on = .(joined_hosp_id, time), roll = roll_secs]
+setDT(scores)
+
+scores[, o2_branch := fcase(
+  !is.na(o2_meas_time) & o2_meas_time == time & o2_src == 1L, 1L,  # fio2_gt_21
+  !is.na(o2_meas_time) & o2_meas_time == time & o2_src == 2L, 2L,  # lpm_gt_0
+  !is.na(o2_meas_time) & o2_meas_time == time & o2_src == 3L, 3L,  # room_air
+  !is.na(o2_meas_time),                                       4L,  # unresolved_locf
+  default = 5L                                                     # unresolved_zero
+)]
+
+scores[, c("o2_src", "o2_meas_time") := NULL]
+
+rm(news_o2_stream); gc()
 
 scores = replace_na(scores, value = 0L, cols = NULL, set = F, type = "const")
 
@@ -435,15 +524,44 @@ scores[, mews_total  := rowSums(.SD, na.rm = T), .SDcols = patterns("^mews_")]
 scores[, news_total  := rowSums(.SD, na.rm = T), .SDcols = patterns("^news_")]
 scores[, qsofa_total := rowSums(.SD, na.rm = T), .SDcols = patterns("^qsofa_")]
 
-# NEWS single-parameter rule: positive if any component scores 3
+# NEWS single-parameter rule: positive if any component scores 3.
+# news_o2 is intentionally excluded: it scores 0 or 2 and can never satisfy a
+# single-parameter-3 rule, so news_any3 is unchanged from round one.
 scores[, news_any3 := as.integer(
-  news_temp == 3L | news_hr == 3L | news_rr == 3L | 
+  news_temp == 3L | news_hr == 3L | news_rr == 3L |
     news_sbp == 3L | news_spo2 == 3L | news_gcs == 3L
 )]
 
+## QC: NEWS2 build -------------------------------------------------------------
+# news_o2 is 0/2 only; the new news_total is exactly the round-one NEWS total
+# plus the O2 item, so it can only be >= the round-one value; news_any3 stays
+# 0/1 and does not reference the O2 item. (The definitive byte-identical check
+# for SIRS/qSOFA/MEWS/MEWS-SF is the external comparison against commit 37897cf.)
+
+news_total_orig =
+  scores$news_temp + scores$news_hr + scores$news_rr +
+  scores$news_sbp  + scores$news_spo2 + scores$news_gcs
+
+if (!all(scores$news_o2 %in% c(0L, 2L))) {
+  stop("news_o2 took a value other than 0 or 2.", call. = FALSE)
+}
+if (!all(scores$news_total == news_total_orig + scores$news_o2)) {
+  stop("news_total is not the round-one NEWS total plus the O2 item.", call. = FALSE)
+}
+if (!all(scores$news_total >= news_total_orig)) {
+  stop("news_total fell below the round-one NEWS total.", call. = FALSE)
+}
+if (!all(scores$news_any3 %in% c(0L, 1L))) {
+  stop("news_any3 is not 0/1.", call. = FALSE)
+}
+
+message("✅ NEWS2 build QC passed (O2 item additive; news_any3 unchanged).")
+
+rm(news_total_orig)
+
 # scores on the wards only -----------------------------------------------------
 
-scores = 
+scores =
   tidytable(scores) |>
   ftransform(mews_sf_total = mews_total + sf) |>
   join(ward_times, how = "inner", multiple = T) |>
@@ -459,39 +577,114 @@ scores =
   fungroup() |>
   funique()
 
-# add primary outcome ----------------------------------------------------------
+# add outcomes -----------------------------------------------------------------
+# P1 rewrote outcome_times to carry, for five outcomes over the competing-
+# risk universe {icu, death, hospice}, an indicator (o_k_01), an event time
+# (event_k_dttm), and a censoring time (censor_k_dttm). This left join brings
+# those through to scores_full.parquet, and for each outcome computes
+#   end_k_dttm = pmin(out_dttm, event_k_dttm, censor_k_dttm)
+# the last score time that outcome admits; 03a will truncate each outcome at its
+# own end_k_dttm. The composite carries no censoring, so end_composite_dttm
+# equals the round-one end_dttm exactly and we still truncate on the composite
+# here, leaving the exported row set unchanged. The round-one o_primary_01 /
+# o_nohospc_01 / end_dttm fields are retained so the existing 03_analysis.R keeps
+# running until P5 lands.
 
-outcomes = fread(here("proj_tables/outcome_times.csv"))
+## Parquet preserves column types, so every dttm column round-trips as POSIXct --
+## including structurally all-missing ones such as censor_composite_dttm. (Under
+## the old CSV path those read back as logical and needed a coercion pass; parquet
+## removes that hazard entirely, which is the point of the migration.)
+outcomes = as.data.table(read_parquet(here("proj_tables", "outcome_times.parquet")))
 
-scores = 
+scores =
   join(scores, outcomes, how = "left", multiple = T) |>
   fmutate(o_primary_01 = if_else(!is.na(outcome_dttm),         1L, 0L)) |>
   fmutate(o_nohospc_01 = if_else(!is.na(outcome_nohospc_dttm), 1L, 0L)) |>
-  fmutate(end_dttm     = pmin(out_dttm, outcome_dttm, na.rm = T)) |>
-  fsubset(time < end_dttm) 
+  fmutate(
+    end_composite_dttm = pmin(out_dttm, event_composite_dttm, censor_composite_dttm, na.rm = T),
+    end_nohospice_dttm = pmin(out_dttm, event_nohospice_dttm, censor_nohospice_dttm, na.rm = T),
+    end_wardicu_dttm   = pmin(out_dttm, event_wardicu_dttm,   censor_wardicu_dttm,   na.rm = T),
+    end_warddeath_dttm = pmin(out_dttm, event_warddeath_dttm, censor_warddeath_dttm, na.rm = T),
+    end_hospicedc_dttm = pmin(out_dttm, event_hospicedc_dttm, censor_hospicedc_dttm, na.rm = T)
+  ) |>
+  fmutate(end_dttm = pmin(out_dttm, outcome_dttm, na.rm = T)) |>
+  fsubset(time < end_dttm)
+
+## QC: outcome carry-through ---------------------------------------------------
+# The composite reproduces the round-one truncation exactly and its indicator
+# matches the round-one primary indicator.
+
+if (!identical(scores$o_composite_01, scores$o_primary_01)) {
+  stop("o_composite_01 (from outcome_times) disagrees with o_primary_01.", call. = FALSE)
+}
+if (!all(scores$end_composite_dttm == scores$end_dttm)) {
+  stop("end_composite_dttm does not equal the round-one end_dttm.", call. = FALSE)
+}
+
+message("✅ Outcome carry-through QC passed (composite matches round one).")
+
+rm(outcomes)
 
 # add cancer dx to score df ----------------------------------------------------
 
-cancer = 
+cancer =
   fsubset(cohort, ca_01 == 1) |>
-  pull(joined_hosp_id) 
+  pull(joined_hosp_id)
 
 scores$ca_01 = if_else(scores$joined_hosp_id %in% cancer, 1L, 0L)
 
 # add ed admission to score df -------------------------------------------------
 
-ed = 
+ed =
   fsubset(cohort, ed_admit_01 == 1) |>
-  pull(joined_hosp_id) 
+  pull(joined_hosp_id)
 
 scores$ed_admit_01 = if_else(scores$joined_hosp_id %in% ed, 1L, 0L)
+
+# news2 O2 resolution diagnostic -----------------------------------------------
+# Counts of score-observation rows by how the O2 item was resolved, by cancer
+# status. Under the grid-fixed carry (see above), a "direct" resolution
+# (fio2_gt_21 / lpm_gt_0 / room_air) requires an O2 measurement whose timestamp
+# coincides exactly with a score row; a value carried within 6h is
+# unresolved_locf, and a row with no O2 within 6h is unresolved_zero (news_o2
+# zero-filled = treated as room air).
+
+o2_branch_labs = c("fio2_gt_21", "lpm_gt_0", "room_air", "unresolved_locf", "unresolved_zero")
+
+news_o2_resolution =
+  fcount(scores, ca_01, o2_branch, name = "n") |>
+  ftransform(resolution_branch = o2_branch_labs[o2_branch]) |>
+  fselect(ca_01, resolution_branch, n) |>
+  ftransform(site = site_lowercase) |>
+  roworder(ca_01, resolution_branch)
+
+if (!dir.exists(here(BOX_DIR, "diagnostics"))) {
+  dir.create(here(BOX_DIR, "diagnostics"), recursive = TRUE)
+}
+
+fwrite(
+  news_o2_resolution,
+  here(BOX_DIR, "diagnostics", paste0("news_o2_resolution-", site_lowercase, ".csv"))
+)
+
+message(
+  sprintf("✅ NEWS2 O2 resolution diagnostic written | %d branch × cancer cells.",
+          nrow(news_o2_resolution))
+)
+
+## o2_branch is a per-row helper for the diagnostic only; drop it so
+## scores_full.parquet gains only news_o2 and the outcome columns.
+scores = fselect(scores, -o2_branch)
+
+rm(cancer, ed, news_o2_resolution, o2_branch_labs)
 
 # save scores ------------------------------------------------------------------
 
 .n_score_rows = nrow(scores)
 
 write_parquet(scores, here("proj_tables", "scores_full.parquet"))
-saveRDS(site_lowercase, here("proj_tables", "site_lowercase.rds"))
+write_parquet(data.frame(site_lowercase = site_lowercase, stringsAsFactors = FALSE),
+              here("proj_tables", "site_lowercase.parquet"))
 
 rm(list = setdiff(
   ls(),

@@ -2,7 +2,7 @@
 
 # Setup script for CLIF project validating risk tools in oncology.
 
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 # setup ------------------------------------------------------------------------
 
@@ -17,10 +17,11 @@ packages_to_install =
     "collapse",
     "janitor",
     "glmmTMB",
+    "geepack",
     "readxl",
     "arrow",
-    "rvest", 
-    "readr", 
+    "rvest",
+    "readr",
     "yaml",
     "here",
     "pROC",
@@ -29,7 +30,7 @@ packages_to_install =
     "ps"
   )
 
-packages_to_load = 
+packages_to_load =
   c(
     "data.table",
     "tidytable",
@@ -38,6 +39,7 @@ packages_to_load =
     "arrow",
     "here",
     "pROC",
+    "geepack",
     "ps"
   )
 
@@ -128,8 +130,8 @@ allowed_files = c("parquet", "csv", "fst")
 ### user enters site details ---------------------------------------------------
 
 site_lowercase   = tolower(config$site_lowercase)
-file_type        = tolower(config$file_type)  
-tables_location  = config$clif_data_location # here("../_clif_data/v_2.1") 
+file_type        = tolower(config$file_type)
+tables_location  = config$clif_data_location # here("../_clif_data/v_2.1")
 project_location = config$project_location
 
 ### artifact destination -------------------------------------------------------
@@ -146,7 +148,7 @@ if (!(site_lowercase %in% allowed_sites)) {
   stop(
     paste0(
       "Invalid '", site_lowercase,
-      "'. Expected one of: ", 
+      "'. Expected one of: ",
       paste(allowed_sites, collapse = ", "), call. = F
     )
   )
@@ -158,7 +160,7 @@ if (!(file_type %in% allowed_files)) {
   stop(
     paste0(
       "Invalid '", file_type,
-      "'. Expected one of: ", 
+      "'. Expected one of: ",
       paste(allowed_files, collapse = ", "), call. = FALSE
     )
   )
@@ -166,7 +168,7 @@ if (!(file_type %in% allowed_files)) {
 
 ### pull time zone from site details -------------------------------------------
 
-# site_time_zone = 
+# site_time_zone =
 #   fsubset(site_details, site_name == site_lowercase) |>
 #   select(tz) |>
 #   tibble::deframe()
@@ -183,27 +185,38 @@ if (!dir.exists(here(BOX_DIR))) {
   dir.create(here(BOX_DIR), recursive = TRUE)
 }
 
+# Round-two artifacts are organized into six analysis subdirectories. Creating
+# them here means no script needs a defensive dir.create at write time, and a
+# site can see the expected layout before the run produces anything.
+box_subdirs = c("main", "threshold", "sensitivity", "horizon", "diagnostics", "meta")
+for (sd in box_subdirs) {
+  if (!dir.exists(here(BOX_DIR, sd))) {
+    dir.create(here(BOX_DIR, sd), recursive = TRUE)
+  }
+}
+rm(box_subdirs, sd)
+
 ### dates ----------------------------------------------------------------------
 
 start_date = as.POSIXct("2016-01-01", tz = "UTC") # could be site_time_zone if we care...
 end_date   = as.POSIXct("2024-12-31", tz = "UTC") # could be site_time_zone if we care...
 today      = format(Sys.Date(), "%y%m%d")
 
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 # data -------------------------------------------------------------------------
 
 ## clif tables needed for project ----------------------------------------------
 
-required_tables = 
+required_tables =
   c(
-    "patient", 
+    "patient",
     "hospital_diagnosis",
-    "hospitalization", 
-    "adt", 
-    "vitals", 
-    "labs", 
-    "medication_admin_continuous", 
+    "hospitalization",
+    "adt",
+    "vitals",
+    "labs",
+    "medication_admin_continuous",
     "respiratory_support",
     "code_status",
     "patient_assessments"
@@ -211,14 +224,14 @@ required_tables =
 
 ## check required tables against available tables ------------------------------
 
-clif_table_filenames = 
+clif_table_filenames =
   list.files(
-    path       = tables_location, 
-    pattern    = paste0("^clif_.*\\.", file_type, "$"), 
+    path       = tables_location,
+    pattern    = paste0("^clif_.*\\.", file_type, "$"),
     full.names = TRUE
   )
 
-clif_table_basenames = 
+clif_table_basenames =
   basename(clif_table_filenames) |>
   str_remove(paste0("\\.", file_type, "$")) |> # remove extension
   str_remove("^clif_") |>                      # remove leading 'clif_'
@@ -268,25 +281,25 @@ names(data_list) = names(required_filenames)
 ### function to validate a table -----------------------------------------------
 
 validate_table = function(tbl, table_name, req_vars = NULL, req_values = list()) {
-  
+
   if (is.null(req_vars)) req_vars = character(0)
-  
+
   problems     = character()
   actual_names = tolower(names(tbl))
   req_lower    = tolower(req_vars)
   missing_vars = req_vars[!req_lower %in% actual_names]
-  
+
   if (length(missing_vars)) {
     problems = c(problems, sprintf("Missing required vars: %s", paste(missing_vars, collapse = ", ")))
   }
-  
+
   for (var in names(req_values)) {
     resolved_var = .resolve(tbl, var)
     if (is.na(resolved_var)) {
       problems = c(problems, sprintf("Missing '%s' needed for value checks.", var))
       next
     }
-    
+
     ### special handling for FileSystemDataset
     if (inherits(tbl, "FileSystemDataset")) {
       present_vals = character(0)
@@ -301,7 +314,7 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
           present_vals = na.omit(as.character(value_counts[[resolved_var]]))
         }
       }, error = function(e) { })
-      
+
       if (length(present_vals) == 0) {
         tryCatch({
           sample_data =
@@ -327,11 +340,11 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
     } else {
       present_vals = na.omit(unique(as.character(tbl[[resolved_var]])))
     }
-    
+
     present_vals  = tolower(trimws(as.character(present_vals)))
     expected_vals = unique(tolower(trimws(req_values[[var]])))
     missing_vals  = setdiff(expected_vals, present_vals)
-    
+
     if (length(missing_vals)) {
       problems = c(
         problems,
@@ -339,11 +352,11 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
       )
     }
   }
-  
+
   if (length(problems)) {
     return(sprintf("Table '%s':\n- %s", table_name, paste(problems, collapse = "\n- ")))
   }
-  
+
   invisible(NULL)
 }
 
@@ -351,31 +364,31 @@ validate_table = function(tbl, table_name, req_vars = NULL, req_values = list())
 
 validate_all_tables = function(data_list, validation_specs) {
   all_problems = character()
-  
+
   for (spec in validation_specs) {
     tbl_name = spec$table_name
     if (!tbl_name %in% names(data_list)) {
       all_problems = c(all_problems, sprintf("Table '%s' is missing entirely.", tbl_name))
       next
     }
-    
+
     tbl = data_list[[tbl_name]]
-    
-    tbl_problems = 
+
+    tbl_problems =
       validate_table(
         tbl        = tbl,
         table_name = tbl_name,
         req_vars   = spec$req_vars,
         req_values = spec$req_values
       )
-    
+
     if (!is.null(tbl_problems)) all_problems = c(all_problems, tbl_problems)
   }
-  
+
   if (length(all_problems)) {
     stop("Validation errors found:\n", paste(all_problems, collapse = "\n\n"), call. = FALSE)
   }
-  
+
   message("✅ Validation passed: all required tables are present and contain needed values.")
 }
 
@@ -383,16 +396,16 @@ validate_all_tables = function(data_list, validation_specs) {
 
 #### prep vitals and labs separately, as they're used more than once -----------
 
-req_vitals = 
+req_vitals =
   c(
-    "heart_rate", 
-    "respiratory_rate", 
-    "sbp", 
-    "spo2", 
+    "heart_rate",
+    "respiratory_rate",
+    "sbp",
+    "spo2",
     "temp_c"
   )
 
-req_labs = 
+req_labs =
   c(
     "bilirubin_total",
     "bun",
@@ -409,7 +422,7 @@ req_labs =
 
 #### make lists of other tables' validation requirements -----------------------
 
-patient_list = 
+patient_list =
   list(
     table_name = "patient",
     req_vars   = c("patient_id", "race_category", "ethnicity_category", "sex_category"),
@@ -420,21 +433,21 @@ patient_list =
     )
   )
 
-hosp_list = 
+hosp_list =
   list(
     table_name = "hospitalization",
     req_vars   = c(
-      "patient_id", 
-      "hospitalization_id", 
-      "age_at_admission", 
-      "admission_dttm", 
-      "discharge_dttm", 
+      "patient_id",
+      "hospitalization_id",
+      "age_at_admission",
+      "admission_dttm",
+      "discharge_dttm",
       "discharge_category"
     ),
     req_values = list(discharge_category = c("Hospice", "Expired"))
   )
 
-adt_list = 
+adt_list =
   list(
     table_name = "adt",
     req_vars   = c("hospitalization_id", "hospital_id", "location_category", "in_dttm", "out_dttm"),
@@ -443,11 +456,11 @@ adt_list =
 
 dx_list = list(
   table_name = "hospital_diagnosis",
-  req_vars   = c("hospitalization_id", "diagnosis_code", "diagnosis_code_format"),
+  req_vars   = c("hospitalization_id", "diagnosis_code", "diagnosis_code_format", "diagnosis_primary"),
   req_values = list(diagnosis_code_format = c("ICD10CM"))
 )
 
-med_list = 
+med_list =
   list(
     table_name = "medication_admin_continuous",
     req_vars   = c("med_group", "med_category"),
@@ -457,42 +470,42 @@ med_list =
     )
   )
 
-resp_list = 
+resp_list =
   list(
     table_name = "respiratory_support",
-    req_vars   = c("device_category"),
-    req_values = list(device_category = c("IMV"))
+    req_vars   = c("device_category", "lpm_set", "fio2_set"),
+    req_values = list(device_category = c("IMV", "Room Air"))
   )
 
-vitals_list = 
+vitals_list =
   list(
     table_name = "vitals",
     req_vars   = c("vital_category", "vital_value", "recorded_dttm"),
     req_values = list(vital_category = req_vitals)
   )
 
-labs_list = 
+labs_list =
   list(
     table_name = "labs",
     req_vars   = c("lab_category", "lab_value", "lab_result_dttm"),
     req_values = list(lab_category = req_labs)
   )
 
-pa_list = 
+pa_list =
   list(
     table_name = "patient_assessments",
     req_vars   = c("assessment_category", "numerical_value", "recorded_dttm"),
     req_values = list(assessment_category = "gcs_total")
   )
-  
+
 validation_specs = list(
-  patient_list, 
-  hosp_list, 
-  adt_list, 
+  patient_list,
+  hosp_list,
+  adt_list,
   dx_list,
-  med_list, 
-  resp_list, 
-  vitals_list, 
+  med_list,
+  resp_list,
+  vitals_list,
   labs_list,
   pa_list
 )
