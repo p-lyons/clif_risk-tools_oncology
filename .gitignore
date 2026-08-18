@@ -18,7 +18,7 @@ CLIF_*.csv
 CLIF_*.fst
 
 #ignore config
-*.yaml
+config_clif_oncrisk.yaml
 
 #ignore the identifier app
 CLIF_cohort_identifier*
