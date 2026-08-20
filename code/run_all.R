@@ -63,7 +63,14 @@ for (st in stages) {
     run_log$n_cohort     = nrow(cohort)
     run_log$n_cancer     = sum(cohort$ca_01 == 1)
     run_log$n_ed_admit   = sum(cohort$ed_admit_01 == 1)
-    run_log$outcome_rate = mean(cohort$dead_01 + cohort$hospice_01 > 0)
+    # Composite outcome rate over ED-admit encounters, from the authoritative
+    # o_composite_01 flag (ward-to-ICU transfer OR ward death OR hospice
+    # discharge). The prior mean(dead_01 + hospice_01 > 0) omitted ward-to-ICU
+    # transfers entirely, so it understated the composite rate.
+    .ot      = as.data.table(read_parquet(here("proj_tables", "outcome_times.parquet")))
+    .ed_jids = cohort$joined_hosp_id[cohort$ed_admit_01 == 1]
+    run_log$outcome_rate = mean(.ot[joined_hosp_id %in% .ed_jids]$o_composite_01)
+    rm(.ot, .ed_jids)
   }
   if (lab == "02") {
     run_log$n_score_rows = .n_score_rows
@@ -123,6 +130,7 @@ EXPECTED_PATTERNS = c(
   "^admission_dx_chapter-ca-",
   "^admission_dx_stem-ca-",
   "^main/maxscores-ca-composite-",
+  "^main/maxscores-mets-composite-",
   "^main/auroc-ca-composite-",
   "^main/firstscore-ca-",
   "^main/events-dxgroup-composite-",

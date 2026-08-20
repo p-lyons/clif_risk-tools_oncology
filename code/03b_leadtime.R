@@ -106,6 +106,15 @@ leadtime_for_outcome = function(outcome_key, scores, cohort, outcome_tt, crossin
   }
 
   lead[, lead_bin := as.character(cut(lead_h, breaks = LEAD_BREAKS, labels = LEAD_LABELS, right = TRUE))]
+
+  # cut() with right = TRUE and a lowest break of 0 leaves the first interval
+  # (0,2] left-open, so lead_h == 0 falls into no bin and returns NA. The
+  # time < end_dttm truncation makes lead times strictly positive in continuous
+  # time, but an exact timestamp tie (cross_time == event_dttm) yields lead_h == 0
+  # and a silent NA bin -- which the lead_h < 0 check above (na.rm = TRUE) does not
+  # catch. Fail loudly rather than emit a signal-less lead_bin = NA row.
+  stopifnot(!anyNA(lead$lead_bin))
+
   leadtime = lead[
     , .(n = .N, sum_hours = sum(lead_h), sumsq_hours = sum(lead_h^2)),
     by = .(score_name, ca_01, lead_bin)
