@@ -13,6 +13,13 @@
 #   Model: outcome_24h ~ value * ca_01 (+ hospital_id where >1 hospital),
 #          family = binomial, id = joined_hosp_id, corstr = "exchangeable".
 #   Outcome: composite at the 24-hour horizon (D3: ward-to-ICU o_composite).
+#
+# Ordering note. The GEE fits are the most expensive step in the pipeline (hours
+# at a large site). gee_coefficients is therefore written to disk IMMEDIATELY
+# after fitting, BEFORE any quality-control step runs. Every QC below is
+# advisory — it reports, it never fails the stage — and each is additionally
+# wrapped so that an unexpected error (a missing column in the glmmTMB export, a
+# malformed CSV) prints a warning instead of discarding the fitted models.
 
 if (!exists("BOX_DIR")) {
   stop("BOX_DIR not found. Did you run 00_setup first?", call. = FALSE)
@@ -129,7 +136,19 @@ gee_coefficients = rbindlist(lapply(SCORE_COLS, function(sc_name) {
 
 gee_coefficients[, site := site_lowercase]
 
-# QC ---------------------------------------------------------------------------
+# write ------------------------------------------------------------------------
+# Written before the QC block: the fits are expensive and must survive any
+# problem in an advisory check.
+
+meta_dir = here(BOX_DIR, "meta")
+if (!dir.exists(meta_dir)) dir.create(meta_dir, recursive = TRUE, showWarnings = FALSE)
+
+gee_path = file.path(meta_dir, paste0("gee_coefficients-", site_lowercase, ".csv"))
+fwrite(gee_coefficients, gee_path)
+
+message("✅ GEE coefficients written to: ", gee_path)
+
+# QC (advisory; runs after the write and cannot discard it) --------------------
 
 # convergence: report, do not fail (rows already carry converged)
 n_nonconv = sum(!gee_coefficients$converged)
@@ -141,26 +160,56 @@ if (n_nonconv > 0L) {
 
 # sign of interaction vs round-one glmmTMB (meta/coefficients); flag, do not fail
 glmm_path = here(BOX_DIR, "meta", paste0("coefficients-", site_lowercase, ".csv"))
-if (file.exists(glmm_path)) {
-  glmm = fread(glmm_path)[, .(score, glmm_beta_int = beta_int)]
+
+sign_check = function(glmm_path, gee_coefficients) {
+
+  if (!file.exists(glmm_path)) {
+    message("  (glmmTMB coefficients not found; skipping sign cross-check)")
+    return(invisible(NULL))
+  }
+
+  glmm_raw = fread(glmm_path)
+
+  need = c("score", "beta_int")
+  if (!all(need %in% names(glmm_raw))) {
+    message("  ⚠ glmmTMB export lacks ", paste(setdiff(need, names(glmm_raw)), collapse = " / "),
+            "; skipping sign cross-check.")
+    return(invisible(NULL))
+  }
+
+  glmm = glmm_raw[, .(score, glmm_beta_int = beta_int)]
   cmp  = merge(gee_coefficients[, .(score, gee_beta_int = beta_int)], glmm, by = "score")
+
+  if (nrow(cmp) == 0L) {
+    message("  ⚠ no scores matched between the GEE and glmmTMB exports; sign cross-check is vacuous.")
+    return(invisible(NULL))
+  }
+
   cmp[, sign_agree := sign(gee_beta_int) == sign(glmm_beta_int)]
-  disagree = cmp[sign_agree == FALSE & !is.na(gee_beta_int) & !is.na(glmm_beta_int)]$score
+  comparable = cmp[!is.na(gee_beta_int) & !is.na(glmm_beta_int)]
+
+  if (nrow(comparable) == 0L) {
+    message("  ⚠ no score has a non-missing interaction in both exports; sign cross-check is vacuous.")
+    return(invisible(NULL))
+  }
+
+  disagree = comparable[sign_agree == FALSE]$score
   if (length(disagree) > 0L) {
     message("  ⚠ GEE/glmmTMB interaction sign disagrees for: ", paste(disagree, collapse = ", "))
   } else {
-    message("✅ GEE interaction signs agree with round-one glmmTMB.")
+    message("✅ GEE interaction signs agree with round-one glmmTMB (", nrow(comparable), " of ",
+            length(SCORE_COLS), " scores compared).")
   }
-} else {
-  message("  (glmmTMB coefficients not found; skipping sign cross-check)")
+  invisible(NULL)
 }
 
-# write ------------------------------------------------------------------------
-
-meta_dir = here(BOX_DIR, "meta")
-if (!dir.exists(meta_dir)) dir.create(meta_dir, recursive = TRUE, showWarnings = FALSE)
-
-fwrite(gee_coefficients, file.path(meta_dir, paste0("gee_coefficients-", site_lowercase, ".csv")))
+tryCatch(
+  sign_check(glmm_path, gee_coefficients),
+  error = function(e) {
+    message("  ⚠ sign cross-check failed (", conditionMessage(e),
+            "); GEE coefficients are already written and unaffected.")
+  }
+)
 
 message("\n== 03c complete ==")
 message("Files written to: ", meta_dir)
