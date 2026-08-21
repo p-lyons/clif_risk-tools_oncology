@@ -1,27 +1,9 @@
 # R specific gitignores
 .Rprofile
 .Rhistory
-.Rprofile
 .Ruserdata
 .DS_Store
 .Rproj.user
-
-## ignore the renv initialization file
-initialize_renv.R
-
-## ignore filtered CLIF tables stored as Rdata
-*.RData
-
-#ignore source CLIF_ files 
-CLIF_*.parquet
-CLIF_*.csv
-CLIF_*.fst
-
-#ignore config
-config_clif_oncrisk.yaml
-
-#ignore the identifier app
-CLIF_cohort_identifier*
 
 # ignore file used to initialize renv when creating the template
 initialize_renv.R
@@ -29,14 +11,31 @@ initialize_renv.R
 # ignore filtered CLIF tables stored as Rdata
 *.RData
 
+# ignore source CLIF_ files
+CLIF_*.parquet
+CLIF_*.csv
+CLIF_*.fst
+
+# ignore the identifier app
+CLIF_cohort_identifier*
+
+# ignore the machine-local site config, which carries absolute paths.
+# This rule is inert while config/config_clif_oncrisk.yaml is tracked: a
+# .gitignore rule never applies to an already-tracked file. The working
+# protections are staging by explicit path and, per machine,
+#   git update-index --skip-worktree config/config_clif_oncrisk.yaml
+# The rest of config/ stays visible to git so that a newly added shared file
+# (a site crosswalk, a code list) is not silently dropped from a commit.
+config/config_clif_oncrisk.yaml
+
 # ignore proj_output and proj_tables
 proj_output/
 proj_tables/
-upload_to_box/
-config/
 
-#Ignore RENV Cache
-# Ignore renv cache
+# ignore the Box upload directories
+upload_to_box/
+upload_to_box_v2/
+
+# ignore renv cache
 renv/cache/*
 renv/library
-upload_to_box_v2/
