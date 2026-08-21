@@ -678,6 +678,88 @@ scores = fselect(scores, -o2_branch)
 
 rm(cancer, ed, news_o2_resolution, o2_branch_labs)
 
+# reconcile cohort against the score table -------------------------------------
+# A small number of encounters clear every 01_cohort.R exclusion and still
+# contribute no score rows. The "< 6h data" filter asks whether a qualifying
+# vital exists at least 6h after first ward arrival; it does not require that
+# vital to precede the outcome. An encounter whose composite event lands between
+# hour 6 and its next qualifying vital therefore survives the cohort filters and
+# then loses every row to the `time < end_dttm` truncation above.
+#
+# Rather than predict which encounters those are, drop them by observation: any
+# cohort encounter with zero score rows is removed from cohort.parquet and
+# recorded as a sixth step in the inclusion flow. This also catches any other
+# route to an empty score set. Because all five end_*_dttm resolve to the
+# earliest of ICU / ward death / hospice, an encounter with zero rows under the
+# composite has zero rows under every outcome, so one pass covers all of them.
+
+scored_jids = funique(scores$joined_hosp_id)
+orphan_jids = setdiff(cohort$joined_hosp_id, scored_jids)
+
+orphan_ca = fsubset(cohort, joined_hosp_id %in% orphan_jids & ca_01 == 1L)
+orphan_no = fsubset(cohort, joined_hosp_id %in% orphan_jids & ca_01 == 0L)
+
+message(sprintf(
+  "  cohort/score reconciliation: %d encounter(s) with no calculable score (%d cancer, %d non-cancer).",
+  length(orphan_jids), nrow(orphan_ca), nrow(orphan_no)
+))
+
+cohort = fsubset(cohort, !joined_hosp_id %in% orphan_jids)
+
+write_parquet(cohort, here("proj_tables", "cohort.parquet"))
+
+## append the reconciliation step to the inclusion flow ------------------------
+# Rows 2-5 of the flow count ED-admit encounters only, so row 6 does too, even
+# though the drop above applies to the full cohort (the broader cohort feeds the
+# se_no_ed_req variant).
+
+flow_path = here(BOX_DIR, paste0("figure_s01_flow_", site_lowercase, ".csv"))
+flow_df   = fread(flow_path)
+
+ed_reconciled = fsubset(cohort, ed_admit_01 == 1L)
+n_remain_ca   = fnunique(fsubset(ed_reconciled, ca_01 == 1L)$joined_hosp_id)
+n_remain_no   = fnunique(fsubset(ed_reconciled, ca_01 == 0L)$joined_hosp_id)
+
+flow_row = tidytable(
+  step           = "After excluding encounters with no calculable score before the outcome",
+  n_remaining_ca = n_remain_ca,
+  n_excluded_ca  = flow_df$n_remaining_ca[nrow(flow_df)] - n_remain_ca,
+  n_remaining_no = n_remain_no,
+  n_excluded_no  = flow_df$n_remaining_no[nrow(flow_df)] - n_remain_no
+)
+
+flow_df = rbind(flow_df, flow_row)
+
+fwrite(flow_df, flow_path)
+
+## QC --------------------------------------------------------------------------
+# The cohort and the score table must now name exactly the same encounters, in
+# both directions, and agree on the ED-admit denominator that every downstream
+# artifact family reports.
+
+stopifnot(length(setdiff(cohort$joined_hosp_id, scored_jids)) == 0L)
+stopifnot(length(setdiff(scored_jids, cohort$joined_hosp_id)) == 0L)
+
+n_ed_cohort = fnunique(ed_reconciled$joined_hosp_id)
+n_ed_scores = fnunique(fsubset(scores, ed_admit_01 == 1L)$joined_hosp_id)
+
+stopifnot(n_ed_cohort == n_ed_scores)
+
+message(sprintf(
+  "✅ cohort and score table reconciled | %s encounters, %s ED-admit.",
+  format(nrow(cohort), big.mark = ","), format(n_ed_cohort, big.mark = ",")
+))
+
+## refresh the run-log counts captured by run_all after stage 01 ---------------
+
+run_log$n_cohort       = nrow(cohort)
+run_log$n_cancer       = sum(cohort$ca_01 == 1L)
+run_log$n_ed_admit     = n_ed_cohort
+run_log$n_no_score_row = length(orphan_jids)
+
+rm(scored_jids, orphan_jids, orphan_ca, orphan_no, flow_path, flow_df,
+   flow_row, ed_reconciled, n_remain_ca, n_remain_no, n_ed_cohort, n_ed_scores)
+
 # save scores ------------------------------------------------------------------
 
 .n_score_rows = nrow(scores)
