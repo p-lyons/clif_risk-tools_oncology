@@ -5,6 +5,16 @@ if (!exists("BOX_DIR")) {
   stop("BOX_DIR not found. Did you run 00_setup first?", call. = FALSE)
 }
 
+## allow_sparse_o2 is read and validated once in 00_setup.R, from
+## config/config_clif_oncrisk.yaml, and carried through the stage-01 cleanup. It
+## governs the sparse-oxygen guard at the end of this file. Nothing in this file
+## is site-modifiable; a site that needs the override edits its config, not the
+## pipeline.
+
+if (!exists("allow_sparse_o2")) {
+  stop("allow_sparse_o2 not found. Did you run 00_setup first?", call. = FALSE)
+}
+
 # extract vital signs and assign score points ----------------------------------
 
 ## make a list of data frames for each vital sign ------------------------------
@@ -495,8 +505,8 @@ scores[, o2_branch := fcase(
   !is.na(o2_meas_time) & o2_meas_time == time & o2_src == 1L, 1L,  # fio2_gt_21
   !is.na(o2_meas_time) & o2_meas_time == time & o2_src == 2L, 2L,  # lpm_gt_0
   !is.na(o2_meas_time) & o2_meas_time == time & o2_src == 3L, 3L,  # room_air
-  !is.na(o2_meas_time),                                       4L,  # unresolved_locf
-  default = 5L                                                     # unresolved_zero
+  !is.na(o2_meas_time),                                       4L,  # carried_forward
+  default = 5L                                                     # defaulted_zero
 )]
 
 scores[, c("o2_src", "o2_meas_time") := NULL]
@@ -643,13 +653,17 @@ scores$ed_admit_01 = if_else(scores$joined_hosp_id %in% ed, 1L, 0L)
 
 # news2 O2 resolution diagnostic -----------------------------------------------
 # Counts of score-observation rows by how the O2 item was resolved, by cancer
-# status. Under the grid-fixed carry (see above), a "direct" resolution
+# status. Under the grid-fixed carry (see above), a concurrent resolution
 # (fio2_gt_21 / lpm_gt_0 / room_air) requires an O2 measurement whose timestamp
-# coincides exactly with a score row; a value carried within 6h is
-# unresolved_locf, and a row with no O2 within 6h is unresolved_zero (news_o2
-# zero-filled = treated as room air).
+# coincides exactly with a score row. A value carried from a measurement within
+# the preceding 6h is carried_forward: those rows are resolved, merely not
+# concurrent, and they account for the large majority of rows (roughly 85% at
+# the reference site). A row with no O2 measurement within 6h is defaulted_zero:
+# news_o2 is zero-filled and the patient is treated as being on room air. Only
+# defaulted_zero represents an absent measurement, and the guard below acts on
+# its share of rows.
 
-o2_branch_labs = c("fio2_gt_21", "lpm_gt_0", "room_air", "unresolved_locf", "unresolved_zero")
+o2_branch_labs = c("fio2_gt_21", "lpm_gt_0", "room_air", "carried_forward", "defaulted_zero")
 
 news_o2_resolution =
   fcount(scores, ca_01, o2_branch, name = "n") |>
@@ -657,6 +671,16 @@ news_o2_resolution =
   fselect(ca_01, resolution_branch, n) |>
   ftransform(site = site_lowercase) |>
   roworder(ca_01, resolution_branch)
+
+## QC: the diagnostic must account for every score row exactly once, and every
+## o2_branch value must fall in 1:5 so that the label lookup resolves.
+
+if (sum(news_o2_resolution$n) != nrow(scores)) {
+  stop("news_o2_resolution branch counts do not sum to nrow(scores).", call. = FALSE)
+}
+if (anyNA(news_o2_resolution$resolution_branch)) {
+  stop("resolution_branch contains NA; o2_branch took a value outside 1:5.", call. = FALSE)
+}
 
 if (!dir.exists(here(BOX_DIR, "diagnostics"))) {
   dir.create(here(BOX_DIR, "diagnostics"), recursive = TRUE)
@@ -672,11 +696,98 @@ message(
           nrow(news_o2_resolution))
 )
 
+## QC: the diagnostic carries ten cells (five branches × two cancer strata)
+## unless a branch is empty at this site; name any empty cells rather than
+## failing, since an empty branch is legitimate.
+
+o2_expected_cells = expand.grid(
+  ca_01             = c(0L, 1L),
+  resolution_branch = o2_branch_labs,
+  stringsAsFactors  = FALSE
+)
+
+o2_expected_keys = paste0(o2_expected_cells$ca_01, "|", o2_expected_cells$resolution_branch)
+o2_observed_keys = paste0(news_o2_resolution$ca_01, "|", news_o2_resolution$resolution_branch)
+o2_missing_keys  = setdiff(o2_expected_keys, o2_observed_keys)
+
+if (length(o2_missing_keys) == 0L) {
+  message("✅ NEWS2 O2 diagnostic complete | 10 of 10 branch × cancer cells populated.")
+} else {
+  message(sprintf(
+    "  note: %d of 10 branch × cancer cells are empty at this site (ca_01|branch): %s",
+    length(o2_missing_keys), paste(o2_missing_keys, collapse = ", ")
+  ))
+}
+
+# sparse-oxygen guard ----------------------------------------------------------
+# 00_setup.R fails a site whose respiratory_support lacks lpm_set or fio2_set. A
+# site where those columns exist but are entirely null passes that check, sends
+# every score row to the defaulted_zero branch, and runs NEWS2 without its
+# supplemental-oxygen item without any downstream complaint. The defaulted
+# fraction is therefore printed on every run, warned on above 0.50, and treated
+# as fatal above 0.90. Reference site: 17.6% of non-cancer rows and 11.9% of
+# cancer rows.
+
+n_rows_all = nrow(scores)
+n_rows_ca  = sum(scores$ca_01 == 1L)
+n_rows_no  = sum(scores$ca_01 == 0L)
+
+n_defaulted_all = sum(scores$o2_branch == 5L)
+n_defaulted_ca  = sum(scores$o2_branch == 5L & scores$ca_01 == 1L)
+n_defaulted_no  = sum(scores$o2_branch == 5L & scores$ca_01 == 0L)
+
+frac_defaulted_all = if (n_rows_all > 0L) n_defaulted_all / n_rows_all else NA_real_
+frac_defaulted_ca  = if (n_rows_ca  > 0L) n_defaulted_ca  / n_rows_ca  else NA_real_
+frac_defaulted_no  = if (n_rows_no  > 0L) n_defaulted_no  / n_rows_no  else NA_real_
+
+message(sprintf(
+  "  NEWS2 O2 defaulted to room air | overall %.1f%% | non-cancer %.1f%% | cancer %.1f%%",
+  100 * frac_defaulted_all, 100 * frac_defaulted_no, 100 * frac_defaulted_ca
+))
+
+o2_sparse_msg = paste(
+  "",
+  "================================================================================",
+  sprintf("  SPARSE SUPPLEMENTAL-OXYGEN DATA: %.1f%% of score rows have no oxygen",
+          100 * frac_defaulted_all),
+  "  measurement within 6 hours and were scored as room air. NEWS2 is largely",
+  "  running without its supplemental-oxygen item at this site.",
+  "",
+  "  Check lpm_set, fio2_set, and device_category in respiratory_support. The",
+  "  columns pass the 00_setup.R presence check but may be empty or unmapped.",
+  "",
+  "  Contact the coordinating center before uploading these artifacts.",
+  "================================================================================",
+  "",
+  sep = "\n"
+)
+
+if (isTRUE(frac_defaulted_all > 0.50)) {
+  warning(o2_sparse_msg, call. = FALSE, immediate. = TRUE)
+}
+
+if (isTRUE(frac_defaulted_all > 0.90) && !allow_sparse_o2) {
+  stop(
+    paste0(
+      o2_sparse_msg,
+      "  The oxygen fields are effectively empty rather than merely sparse, so the\n",
+      "  run has been stopped. Set allow_sparse_o2: true in\n",
+      "  config/config_clif_oncrisk.yaml only after the coordinating center confirms\n",
+      "  that this site's oxygen data are genuinely absent.\n"
+    ),
+    call. = FALSE
+  )
+}
+
 ## o2_branch is a per-row helper for the diagnostic only; drop it so
 ## scores_full.parquet gains only news_o2 and the outcome columns.
 scores = fselect(scores, -o2_branch)
 
-rm(cancer, ed, news_o2_resolution, o2_branch_labs)
+rm(cancer, ed, news_o2_resolution, o2_branch_labs,
+   o2_expected_cells, o2_expected_keys, o2_observed_keys, o2_missing_keys,
+   n_rows_all, n_rows_ca, n_rows_no,
+   n_defaulted_all, n_defaulted_ca, n_defaulted_no,
+   frac_defaulted_all, frac_defaulted_ca, frac_defaulted_no, o2_sparse_msg)
 
 # reconcile cohort against the score table -------------------------------------
 # A small number of encounters clear every 01_cohort.R exclusion and still

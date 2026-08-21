@@ -1518,6 +1518,7 @@ keep = c(
   "BOX_DIR",
   "data_list",
   "site_lowercase",
+  "allow_sparse_o2",
   "cohort",
   "cohort_hids",
   "cohort_jids",

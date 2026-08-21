@@ -133,6 +133,7 @@ site_lowercase   = tolower(config$site_lowercase)
 file_type        = tolower(config$file_type)
 tables_location  = config$clif_data_location # here("../_clif_data/v_2.1")
 project_location = config$project_location
+allow_sparse_o2  = config$allow_sparse_o2
 
 ### artifact destination -------------------------------------------------------
 # Single constant governing where every site-level artifact is written, by any
@@ -165,6 +166,45 @@ if (!(file_type %in% allowed_files)) {
     )
   )
 }
+
+### allow_sparse_o2 must be a single TRUE or FALSE -----------------------------
+# This key governs the sparse-oxygen guard in 02_scores.R. That guard stops the
+# run when more than 90% of NEWS2 score rows have no supplemental-oxygen
+# measurement within 6h, which means lpm_set and fio2_set are present as columns
+# in respiratory_support but are effectively empty. Setting
+#
+#   allow_sparse_o2: true
+#
+# in config/config_clif_oncrisk.yaml downgrades that stop to a warning, and the
+# run then finishes with NEWS2 scored without its supplemental-oxygen item. A
+# site should set it only after the coordinating center has confirmed that its
+# oxygen data are genuinely absent. The key is optional: a config file predating
+# it reads as FALSE, so no site fails at startup for holding an older copy.
+# Quoted values are rejected rather than coerced, so "false" fails loudly
+# instead of evaluating as TRUE.
+
+if (is.null(allow_sparse_o2)) {
+  allow_sparse_o2 = FALSE
+}
+
+allow_sparse_o2_ok =
+  is.logical(allow_sparse_o2) &&
+  length(allow_sparse_o2) == 1L &&
+  !is.na(allow_sparse_o2)
+
+if (!allow_sparse_o2_ok) {
+  stop(
+    paste0(
+      "Invalid 'allow_sparse_o2' in config_clif_oncrisk.yaml. Expected true or ",
+      "false, unquoted. Delete the key to accept the default of false."
+    ),
+    call. = FALSE
+  )
+}
+
+rm(allow_sparse_o2_ok)
+
+message(sprintf("Sparse-oxygen override | allow_sparse_o2 = %s", allow_sparse_o2))
 
 ### pull time zone from site details -------------------------------------------
 

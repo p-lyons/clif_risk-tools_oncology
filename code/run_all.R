@@ -15,7 +15,7 @@
 # stage loop below stores its per-stage start time in run_log rather than in a
 # local, and why PIPELINE_VERSION and the manifest helpers are defined AFTER the
 # stages have run.
-
+setwd(here::here())
 run_log = list()
 run_log$t_start_num = as.numeric(Sys.time())   # wall-clock start (epoch seconds)
 
