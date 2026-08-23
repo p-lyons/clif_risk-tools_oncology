@@ -1019,41 +1019,82 @@ score_sds =
 write_artifact(score_sds, "meta", "score_sds", site_lowercase)
 
 # --- bootstrap horizon counts (composite / ca / main) -------------------------
+# Cluster bootstrap over encounters. Encounters are drawn with replacement and
+# EVERY score observation belonging to a drawn encounter enters the resample, so
+# the bootstrap distribution belongs to the same point-level quantity the
+# accompanying horizon counts report. (The prior version drew a single random
+# observation per encounter-score, once, outside the iteration loop; each
+# iteration therefore resampled the same fixed one-row-per-encounter table and
+# summed to the encounter count rather than the observation count.)
+#
+# Expanding all observations of every drawn encounter is done arithmetically
+# rather than physically. Each encounter contributes a fixed count to each
+# (score_name, ca_01, value, outcome, h) cell, so multiplying those cell counts
+# by the encounter's resampled frequency and summing is identical to materializing
+# the expanded table, and keeps the per-iteration join to the collapsed cell set.
 
 message("\n== 03a: bootstrap horizon counts ==")
 
 run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 400L) {
 
   set.seed(2025L)
-  boot_list = vector("list", B)
-  base_dt   = dt[, .(joined_hosp_id, score_name, ca_01, value, h_to_event)]
+
+  base_dt = as.data.table(dt)[, .(joined_hosp_id, score_name, ca_01, value, h_to_event)]
+  for (HH in horizons) base_dt[, (paste0("y_", HH)) := make_y(h_to_event, HH)]
+
+  ## collapse to one row per encounter x cell, per horizon
+  cell_list = vector("list", length(horizons))
+
+  for (i in seq_along(horizons)) {
+    HH   = horizons[i]
+    ycol = paste0("y_", HH)
+    cc = base_dt[
+      , .(n_rows = .N),
+      by = c("joined_hosp_id", "score_name", "ca_01", "value", ycol)
+    ]
+    setnames(cc, ycol, "outcome")
+    cc[, h := HH]
+    cell_list[[i]] = cc
+  }
+
+  cells = rbindlist(cell_list, use.names = TRUE)
+  setkey(cells, joined_hosp_id)
 
   enc_ids = unique(base_dt$joined_hosp_id)
   n_enc   = length(enc_ids)
 
-  for (HH in horizons) base_dt[, (paste0("y_", HH)) := make_y(h_to_event, HH)]
+  ## QC: the unweighted cell set must reproduce the point-level observation count
+  n_obs_cells = cells[h == horizons[1L], sum(n_rows)]
+  n_obs_base  = nrow(base_dt)
 
-  compact = base_dt[, .SD[sample(.N, 1L)], by = .(joined_hosp_id, score_name)]
-  setkey(compact, joined_hosp_id)
+  if (n_obs_cells != n_obs_base) {
+    stop(
+      sprintf("Bootstrap cell collapse lost rows: %d cells vs %d observations.",
+              n_obs_cells, n_obs_base),
+      call. = FALSE
+    )
+  }
+
+  boot_list = vector("list", B)
 
   for (b in seq_len(B)) {
     boot_encs = data.table(joined_hosp_id = sample(enc_ids, n_enc, replace = TRUE))
     enc_freq  = boot_encs[, .(weight = .N), by = joined_hosp_id]
-    samp      = compact[enc_freq, nomatch = NULL, on = "joined_hosp_id"]
+    setkey(enc_freq, joined_hosp_id)
 
-    counts_b = rbindlist(lapply(horizons, function(HH) {
-      col = paste0("y_", HH)
-      samp[, .(n = sum(weight)), by = .(score_name, ca_01, value, outcome = get(col))
-      ][, `:=`(site = site_lowercase, h = HH, iter = b)]
-    }), use.names = TRUE)
+    samp = cells[enc_freq, nomatch = NULL]
 
-    boot_list[[b]] = counts_b
+    boot_list[[b]] = samp[
+      , .(n = sum(weight * n_rows)),
+      by = .(score_name, ca_01, value, outcome, h)
+    ][, `:=`(site = site_lowercase, iter = b)]
+
     if (b %% 50 == 0) message("    bootstrap ", b, "/", B)
   }
 
-  for (HH in horizons) base_dt[, (paste0("y_", HH)) := NULL]
   rbindlist(boot_list, use.names = TRUE)[]
 }
+
 
 long_main = materialize_variant_long("main", scores, fc, OUTCOMES[key == "composite"], STRATA[key == "ca"])
 counts_boot = run_horizon_counts_bootstrap(long_main, HORIZONS, site_lowercase, B = 400L)

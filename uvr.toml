@@ -1,0 +1,49 @@
+[project]
+name = "clif_risk-tools_oncology"
+r_version = ">= 4.6.0"
+
+# Direct dependencies only. uvr resolves the full transitive closure into
+# uvr.lock, which is the source of truth for what every site installs.
+#
+# arrow        table ingest (parquet / csv / fst -> Arrow), 00
+# collapse     fsubset / fmutate / fgroup_by throughout
+# comorbidity  Elixhauser mapping and van Walraven weights, 01
+# data.table   fread / fwrite / setDT throughout
+# dplyr        namespace-qualified verbs over Arrow datasets, 00 and 03a
+# fst          read.fst for sites whose file_type is "fst", 00
+# geepack      geeglm longitudinal models, 03c
+# glmmTMB      random-effects meta-analysis inputs and cluster bootstrap, 03a
+# here         project-root path resolution, every script
+# janitor      get_dupes and clean_names, 01
+# lubridate    dhours / ddays / year arithmetic, 01
+# pROC         AUROC estimation, 03a
+# ps           system memory probe for thread sizing, 00 and 01
+# readxl       ICD-10-CM case-finding workbook, 01
+# rlang        sym() inside the Arrow validators, 00
+# stringr      str_remove and str_detect, 00 through 02b
+# tibble       deframe on lookup tables, 00 and 01
+# tidyr        expand_grid over threshold and hospital grids, 03a
+# tidytable    dplyr-syntax verbs on data.table, throughout
+# yaml         read_yaml on config_clif_oncrisk.yaml, 00
+
+[dependencies]
+arrow = "*"
+collapse = "*"
+comorbidity = "*"
+"data.table" = "*"
+dplyr = "*"
+fst = "*"
+geepack = "*"
+glmmTMB = "*"
+here = "*"
+janitor = "*"
+lubridate = "*"
+pROC = "*"
+ps = "*"
+readxl = "*"
+rlang = "*"
+stringr = "*"
+tibble = "*"
+tidyr = "*"
+tidytable = "*"
+yaml = "*"

@@ -861,7 +861,9 @@ message(sprintf(
   format(nrow(cohort), big.mark = ","), format(n_ed_cohort, big.mark = ",")
 ))
 
-## refresh the run-log counts captured by run_all after stage 01 ---------------
+## set the run-log counts reported by run_all ----------------------------------
+# The composite outcome rate is set further down, in the descriptive block, where
+# its numerator is already computed from the same reconciled sample.
 
 run_log$n_cohort       = nrow(cohort)
 run_log$n_cancer       = sum(cohort$ca_01 == 1L)
@@ -870,6 +872,375 @@ run_log$n_no_score_row = length(orphan_jids)
 
 rm(scored_jids, orphan_jids, orphan_ca, orphan_no, flow_path, flow_df,
    flow_row, ed_reconciled, n_remain_ca, n_remain_no, n_ed_cohort, n_ed_scores)
+
+# encounter-level descriptive artifacts ----------------------------------------
+# Relocated from 01_cohort.R so that every denominator below is the reconciled
+# ED-admit cohort -- the encounters surviving both the 01 exclusions and the
+# no-calculable-score drop above -- and therefore matches the denominator every
+# analysis artifact in 03a/03b reports. Built in 01, these five artifacts ran on
+# the pre-reconciliation set and disagreed with the rest of the pipeline.
+#
+# Second change, at the coordinating center's direction: the encounter-level
+# outcome rows of table_02_cat are now the competing-risk indicators from
+# outcome_times.parquet (composite, nohospice, wardicu, warddeath, hospicedc),
+# under the same outcome keys used in every analysis filename. The round-one
+# rows wicu / d_noicu / h_noicu are removed. Those three conditioned on icu_01
+# (ever in an ICU, by any route) whereas the analysis conditions on a ward-to-ICU
+# transfer, so a ward -> procedural -> ICU path separated them and Table 2
+# implied a composite roughly two percent below the one the analysis reports.
+# icu_01, dead_01, and hospice_01 stay: they are unambiguous descriptive facts
+# about the encounter and carry no outcome definition.
+
+t2_cohort = fsubset(cohort, ed_admit_01 == 1L)
+n_t2      = fnobs(t2_cohort$joined_hosp_id)
+
+## attach the competing-risk outcome indicators --------------------------------
+
+outcome_flags =
+  read_parquet(here("proj_tables", "outcome_times.parquet")) |>
+  as_tidytable() |>
+  fselect(
+    joined_hosp_id,
+    composite_01 = o_composite_01,
+    nohospice_01 = o_nohospice_01,
+    wardicu_01   = o_wardicu_01,
+    warddeath_01 = o_warddeath_01,
+    hospicedc_01 = o_hospicedc_01
+  )
+
+t2_flag_cols = c(
+  "composite_01",
+  "nohospice_01",
+  "wardicu_01",
+  "warddeath_01",
+  "hospicedc_01"
+)
+
+t2_cohort =
+  join(t2_cohort, outcome_flags, how = "left", multiple = FALSE) |>
+  mutate(across(
+    .cols = all_of(t2_flag_cols),
+    .fns  = ~if_else(is.na(.x), 0L, .x)
+  ))
+
+## QC: the outcome rows must decompose exactly ---------------------------------
+# Same identity 03a asserts across artifacts. An exact timestamp tie between two
+# competing events would break it, so failing here rather than in 03a locates the
+# problem at the site's data instead of at the artifact matrix.
+
+n_composite = fsum(t2_cohort$composite_01)
+n_nohospice = fsum(t2_cohort$nohospice_01)
+n_wardicu   = fsum(t2_cohort$wardicu_01)
+n_warddeath = fsum(t2_cohort$warddeath_01)
+n_hospicedc = fsum(t2_cohort$hospicedc_01)
+
+if (n_composite != n_wardicu + n_warddeath + n_hospicedc) {
+  stop(
+    sprintf("Table 2 composite (%d) != wardicu + warddeath + hospicedc (%d).",
+            n_composite, n_wardicu + n_warddeath + n_hospicedc),
+    call. = FALSE
+  )
+}
+
+if (n_nohospice != n_wardicu + n_warddeath) {
+  stop(
+    sprintf("Table 2 nohospice (%d) != wardicu + warddeath (%d).",
+            n_nohospice, n_wardicu + n_warddeath),
+    call. = FALSE
+  )
+}
+
+message(
+  sprintf("✅ Table 2 outcome decomposition | composite %s = wardicu %s + warddeath %s + hospicedc %s",
+          format(n_composite, big.mark = ","), format(n_wardicu, big.mark = ","),
+          format(n_warddeath, big.mark = ","), format(n_hospicedc, big.mark = ","))
+)
+
+## composite outcome rate for the run report -----------------------------------
+# Set here rather than in run_all.R after stage 01. There it was computed over
+# the pre-reconciliation ED-admit set while the three counts printed beside it in
+# run_report were refreshed post-reconciliation, so a site with a larger
+# no-calculable-score drop would have exported a mismatched pair. The numerator
+# and denominator below are the ones table_02_cat and table_02_cont export.
+
+run_log$outcome_rate = n_composite / n_t2
+
+# missingness characterization -------------------------------------------------
+
+miss_summary =
+  fsummarize(
+    t2_cohort,
+    n_total     = fnobs(joined_hosp_id),
+    n_miss_age  = fsum(miss_age),
+    n_miss_sex  = fsum(miss_sex),
+    n_miss_race = fsum(miss_race),
+    n_miss_eth  = fsum(miss_eth),
+    n_miss_vw   = fsum(miss_vw)
+  )
+
+n_denom = miss_summary$n_total
+
+miss_summary =
+  fselect(miss_summary, -n_total) |>
+  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") |>
+  ftransform(
+    variable    = str_remove(variable, "^n_miss_"),
+    n_total     = n_denom,
+    pct_missing = round(100 * n_missing / n_denom, 2),
+    site        = site_lowercase
+  )
+
+fwrite(miss_summary, here(BOX_DIR, paste0("missing_demog_", site_lowercase, ".csv")))
+
+# t02. characteristics/outcomes by cancer status (0 = none, 1 = cancer) --------
+
+## prepare table component = continuous variables ------------------------------
+
+t2_cont =
+  fgroup_by(t2_cohort, ca_01) |>
+  fsummarize(
+    n         = fnobs(joined_hosp_id),
+    age_sum   = fsum(age),
+    age_sumsq = fsum(age^2),
+    age_p025  = fquantile(age, 0.025),
+    age_p975  = fquantile(age, 0.975),
+    vw_sum    = fsum(vw),
+    vw_sumsq  = fsum(vw^2),
+    los_sum   = fsum(los_hosp_d),
+    los_sumsq = fsum(los_hosp_d^2),
+    los_p025  = fquantile(los_hosp_d, 0.025),
+    los_p975  = fquantile(los_hosp_d, 0.975)
+  ) |>
+  ftransform(var_type = "continuous") |>
+  ftransform(site     = paste0(site_lowercase))
+
+## prepare table component = categorized continuous variables ------------------
+
+### age ------------------------------------------------------------------------
+# Bound into t2_cat below. Round one computed these bands and then never bound
+# them, so table_02_cat carried vw and los bands but no age bands.
+
+age_breaks = c( 18,      40,      50,      60,      70,      80,  Inf)
+age_labs   = c("18_39", "40_49", "50_59", "60_69", "70_79", "80_plus")
+
+ages_cat =
+  fselect(t2_cohort, ca_01, age) |>
+  fmutate(a = cut(age, breaks = age_breaks, labels = age_labs, right = F)) |>
+  fgroup_by(ca_01, a) |>
+  fnobs() |>
+  select(ca_01, age_cat = a, n = age) |>
+  ftransform(age_cat = paste0("age_", age_cat)) |>
+  ftransform(var = "age", category = str_remove(age_cat, "age_")) |>
+  fselect(ca_01, var, category, n)
+
+### elixhauser -----------------------------------------------------------------
+
+elix_breaks = c(-Inf,  0, 4,  9, 14,  Inf)
+elix_labs   = c("<= 0", "1-4", "5-9", "10-14", ">= 15")
+
+elix_cat =
+  fselect(t2_cohort, ca_01, vw) |>
+  fmutate(a = cut(vw, breaks = elix_breaks, labels = elix_labs, right = F)) |>
+  fgroup_by(ca_01, a) |>
+  fnobs() |>
+  select(ca_01, elix_cat = a, n = vw) |>
+  ftransform(elix_cat = paste0("vw_", elix_cat)) |>
+  ftransform(var = "vw", category = str_remove(elix_cat, "vw_")) |>
+  fselect(ca_01, var, category, n)
+
+### los (days) -----------------------------------------------------------------
+
+l_breaks = c( 0,        2,         4,         7,         14, Inf)
+l_labs   = c("0-47h", "48h_96h", "96h_1wk", "1wk_2wk", "2wk_plus")
+
+los_cat =
+  fselect(t2_cohort, ca_01, los_hosp_d) |>
+  fmutate(los_cat = cut(los_hosp_d, breaks = l_breaks, labels = l_labs, right = F)) |>
+  fgroup_by(ca_01, los_cat) |>
+  fnobs() |>
+  select(ca_01, los_cat, n = los_hosp_d) |>
+  ftransform(var = "los", category = los_cat) |>
+  fselect(ca_01, var, category, n)
+
+## prepare table component = categorical variables -----------------------------
+# Held out deliberately: rank_enc and mets_01 (carried in cohort.parquet, and
+# mets_01 is three-valued so a pivot would drop its missing level silently); the
+# miss_* indicators (exported above as missing_demog); and wicu_01 / d_noicu_01 /
+# h_noicu_01, superseded by the competing-risk indicators attached above.
+
+t2_cat =
+  select(t2_cohort,
+         -ends_with("id"),
+         -ends_with("dttm"),
+         -age,
+         -vw,
+         -los_hosp_d,
+         -rank_enc,
+         -mets_01,
+         -starts_with("miss_"),
+         -wicu_01,
+         -d_noicu_01,
+         -h_noicu_01) |>
+  pivot_longer(-ca_01, names_to = "var", values_to = "val") |>
+  fsubset(!is.na(val)) |>
+  fmutate(n = val) |>
+  fgroup_by(ca_01, var, val) |>
+  fnobs() |>
+  ftransform(var      = str_remove(var, "_01")) |>
+  ftransform(category = tolower(str_replace_all(as.character(val), "-", "_"))) |>
+  fselect(ca_01, var, category, n) |>
+  rowbind(ages_cat) |>
+  rowbind(elix_cat) |>
+  rowbind(los_cat)
+
+## quality control -------------------------------------------------------------
+
+### check for sample size mismatch in continuous table -------------------------
+
+if (sum(t2_cont$n) != n_t2) {
+  stop(
+    sprintf("Table 2 sample size mismatch: t2_cont sums to %d, reconciled ED-admit cohort is %d.",
+            sum(t2_cont$n), n_t2),
+    call. = FALSE
+  )
+}
+
+### the composite row must equal the analysis denominator's event count --------
+
+t2_composite_n = fsum(fsubset(t2_cat, var == "composite" & category == "1")$n)
+
+if (t2_composite_n != n_composite) {
+  stop(
+    sprintf("Table 2 composite row (%d) disagrees with the encounter-level flag (%d).",
+            t2_composite_n, n_composite),
+    call. = FALSE
+  )
+}
+
+message(sprintf("✅ Table 2 QC passed | %s ED-admit encounters.", format(n_t2, big.mark = ",")))
+
+## export table 2 --------------------------------------------------------------
+
+fwrite(t2_cat,  here(BOX_DIR, paste0("table_02_cat_",  site_lowercase, ".csv")))
+fwrite(t2_cont, here(BOX_DIR, paste0("table_02_cont_", site_lowercase, ".csv")))
+
+# admission diagnosis (reason for admission) -----------------------------------
+# Round-two export. Three-character ICD-10-CM stems are exported unmapped; the
+# coordinating center maps them to CCSR centrally, which avoids distributing a
+# crosswalk to eight sites. Denominators are recoverable from table_02_cont,
+# whose n by ca_01 is the same reconciled ed_admit_01 == 1 sample used here.
+
+## does this site populate diagnosis_primary? ----------------------------------
+# 00_setup.R does not validate diagnosis_primary, so a site can reach this point
+# without it. A descriptive add-on should not halt the primary analysis, so an
+# absent or never-positive field yields header-only artifacts and a message.
+
+has_dx_primary = "diagnosis_primary" %in% names(data_list$hospital_diagnosis)
+
+if (!has_dx_primary) {
+
+  message("Note: hospital_diagnosis has no diagnosis_primary column; admission-diagnosis artifacts will be empty.")
+
+  adm_dx_raw = tidytable(
+    hospitalization_id = hid_jid_crosswalk$hospitalization_id[0],
+    diagnosis_code     = character(0)
+  )
+
+} else {
+
+  adm_dx_raw =
+    dplyr::filter(data_list$hospital_diagnosis, hospitalization_id %in% cohort_hids) |>
+    dplyr::filter(toupper(diagnosis_code_format) == "ICD10CM") |>
+    dplyr::select(hospitalization_id, diagnosis_code, diagnosis_primary) |>
+    dplyr::collect()
+
+  ### diagnosis_primary arrives as integer, logical, or character across sites
+  adm_dx_raw =
+    ftransform(adm_dx_raw, dx_primary_int = suppressWarnings(as.integer(diagnosis_primary))) |>
+    fsubset(!is.na(dx_primary_int) & dx_primary_int == 1L) |>
+    fselect(hospitalization_id, diagnosis_code) |>
+    distinct()
+
+  if (nrow(adm_dx_raw) == 0) {
+    message("Note: no rows with diagnosis_primary == 1; admission-diagnosis artifacts will be empty.")
+  }
+}
+
+## first primary code per linked encounter -------------------------------------
+# A joined_hosp_id can span several source hospitalizations, each with its own
+# primary code. The script's established rule for collapsing constituents is to
+# order by time and take the first, so the primary code of the earliest
+# constituent admission wins, with ascending code as the deterministic tie-break.
+
+hosp_order =
+  dplyr::filter(data_list$hospitalization, hospitalization_id %in% cohort_hids) |>
+  dplyr::select(hospitalization_id, admission_dttm) |>
+  dplyr::collect() |>
+  distinct()
+
+adm_dx_first =
+  join(adm_dx_raw, hid_jid_crosswalk, how = "inner", multiple = TRUE) |>
+  join(hosp_order, how = "inner", multiple = FALSE) |>
+  ftransform(code_clean = toupper(str_remove_all(diagnosis_code, "[^A-Za-z0-9]"))) |>
+  fsubset(str_detect(code_clean, "^[A-Z]")) |>
+  roworder(admission_dttm, code_clean) |>
+  fgroup_by(joined_hosp_id) |>
+  fsummarize(code_clean = ffirst(code_clean))
+
+## attach cancer status and derive chapter letter and code stem ----------------
+
+adm_dx_enc =
+  fselect(t2_cohort, joined_hosp_id, ca_01) |>
+  join(adm_dx_first, how = "inner", multiple = FALSE) |>
+  ftransform(chapter   = substr(code_clean, 1, 1)) |>
+  ftransform(code_stem = substr(code_clean, 1, 3))
+
+## tally at both levels, suppressing cells of five or fewer --------------------
+
+adm_dx_chapter =
+  fselect(adm_dx_enc, ca_01, chapter, joined_hosp_id) |>
+  fgroup_by(ca_01, chapter) |>
+  fnobs() |>
+  fselect(ca_01, chapter, n = joined_hosp_id) |>
+  fsubset(n > 5) |>
+  roworder(ca_01, -n, chapter) |>
+  ftransform(site = site_lowercase)
+
+adm_dx_stem =
+  fselect(adm_dx_enc, ca_01, code_stem, joined_hosp_id) |>
+  fgroup_by(ca_01, code_stem) |>
+  fnobs() |>
+  fselect(ca_01, code_stem, n = joined_hosp_id) |>
+  fsubset(n > 5) |>
+  roworder(ca_01, -n, code_stem) |>
+  ftransform(site = site_lowercase)
+
+fwrite(
+  adm_dx_chapter,
+  here(BOX_DIR, paste0("admission_dx_chapter-ca-", site_lowercase, ".csv"))
+)
+
+fwrite(
+  adm_dx_stem,
+  here(BOX_DIR, paste0("admission_dx_stem-ca-", site_lowercase, ".csv"))
+)
+
+message(
+  sprintf("✅ Admission diagnoses | %s of %s encounters coded | %d chapters | %d stems",
+          format(nrow(adm_dx_enc), big.mark = ","),
+          format(n_t2, big.mark = ","),
+          nrow(adm_dx_chapter),
+          nrow(adm_dx_stem))
+)
+
+rm(t2_cohort, n_t2, outcome_flags, t2_flag_cols,
+   n_composite, n_nohospice, n_wardicu, n_warddeath, n_hospicedc,
+   miss_summary, n_denom,
+   t2_cont, age_breaks, age_labs, ages_cat, elix_breaks, elix_labs, elix_cat,
+   l_breaks, l_labs, los_cat, t2_cat, t2_composite_n,
+   has_dx_primary, adm_dx_raw, hosp_order, adm_dx_first, adm_dx_enc,
+   adm_dx_chapter, adm_dx_stem); gc()
+
 
 # save scores ------------------------------------------------------------------
 

@@ -15,7 +15,11 @@
 # stage loop below stores its per-stage start time in run_log rather than in a
 # local, and why PIPELINE_VERSION and the manifest helpers are defined AFTER the
 # stages have run.
-setwd(here::here())
+
+# Paths. Every stage path below resolves through here::here(), so the loop is
+# independent of the working directory and the session's directory is left as
+# the site found it. here::here() is namespace-qualified because the `here`
+# package is not attached until stage 00 runs.
 run_log = list()
 run_log$t_start_num = as.numeric(Sys.time())   # wall-clock start (epoch seconds)
 
@@ -25,14 +29,14 @@ run_log$t_start_num = as.numeric(Sys.time())   # wall-clock start (epoch seconds
 # does not interrupt iteration.
 
 stages = list(
-  c("00",  "code/00_setup.R"),
-  c("01",  "code/01_cohort.R"),
-  c("02",  "code/02_scores.R"),
-  c("02b", "code/02b_carryforward.R"),
-  c("02c", "code/02c_monitoring.R"),
-  c("03a", "code/03a_artifacts.R"),
-  c("03b", "code/03b_leadtime.R"),
-  c("03c", "code/03c_models.R")
+  c("00",  here::here("code", "00_setup.R")),
+  c("01",  here::here("code", "01_cohort.R")),
+  c("02",  here::here("code", "02_scores.R")),
+  c("02b", here::here("code", "02b_carryforward.R")),
+  c("02c", here::here("code", "02c_monitoring.R")),
+  c("03a", here::here("code", "03a_artifacts.R")),
+  c("03b", here::here("code", "03b_leadtime.R")),
+  c("03c", here::here("code", "03c_models.R"))
 )
 
 message("Starting round-two pipeline...")
@@ -58,20 +62,11 @@ for (st in stages) {
   run_log[[paste0(lab, "_peak_mb")]] = peak
   message(sprintf("  [%-4s] %6.1f min | peak R mem %6.0f Mb", lab, mins, peak))
 
-  # per-stage summary captures (cohort is preserved by 01; .n_score_rows by 02) -
-  if (lab == "01") {
-    run_log$n_cohort     = nrow(cohort)
-    run_log$n_cancer     = sum(cohort$ca_01 == 1)
-    run_log$n_ed_admit   = sum(cohort$ed_admit_01 == 1)
-    # Composite outcome rate over ED-admit encounters, from the authoritative
-    # o_composite_01 flag (ward-to-ICU transfer OR ward death OR hospice
-    # discharge). The prior mean(dead_01 + hospice_01 > 0) omitted ward-to-ICU
-    # transfers entirely, so it understated the composite rate.
-    .ot      = as.data.table(read_parquet(here("proj_tables", "outcome_times.parquet")))
-    .ed_jids = cohort$joined_hosp_id[cohort$ed_admit_01 == 1]
-    run_log$outcome_rate = mean(.ot[joined_hosp_id %in% .ed_jids]$o_composite_01)
-    rm(.ot, .ed_jids)
-  }
+  # per-stage summary captures (.n_score_rows is preserved by 02) ---------------
+  # n_cohort, n_cancer, n_ed_admit, n_no_score_row, and outcome_rate are all set
+  # inside 02_scores.R, after the block that drops encounters with no calculable
+  # score. Capturing them here after stage 01 put a pre-reconciliation numerator
+  # and denominator beside post-reconciliation counts in the same report row.
   if (lab == "02") {
     run_log$n_score_rows = .n_score_rows
   }

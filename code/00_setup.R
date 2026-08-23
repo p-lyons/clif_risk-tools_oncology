@@ -8,29 +8,28 @@
 
 ## libraries -------------------------------------------------------------------
 
-packages_to_install =
-  c(
-    "comorbidity",
-    "data.table",
-    "tidyverse",
-    "tidytable",
-    "collapse",
-    "janitor",
-    "glmmTMB",
-    "geepack",
-    "readxl",
-    "arrow",
-    "rvest",
-    "readr",
-    "yaml",
-    "here",
-    "pROC",
-    "fst",
-    "zoo",
-    "ps"
-  )
+# uvr owns package management for this pipeline. Dependencies and the R version
+# constraint are declared in uvr.toml at the project root; uvr.lock is the source
+# of truth; the project library lives in .uvr/library/ and becomes active only
+# when the pipeline is launched through uvr. This script installs nothing. It
+# confirms that the working set is present in the active library and, if anything
+# is missing, stops with the command that repairs it.
+#
+# Provision once per site, then launch, from the project root:
+#
+#   uvr sync --frozen         install exactly what uvr.lock names; fail if stale
+#   uvr run code/run_all.R    run with the project library and pinned R active
+#
+# From the RStudio console the equivalents are uvr::sync(frozen = TRUE) and
+# uvr::run("code/run_all.R").
+#
+# Every namespace the pipeline touches is verified here, before stage 01, so a
+# site missing one package fails in the first seconds rather than an hour into
+# the run. pkgs_attached is attached with library(). pkgs_required is verified
+# present and reached with :: at its call sites. glmmTMB (03a) and geepack (03c)
+# attach themselves where they are used; both are verified now regardless.
 
-packages_to_load =
+pkgs_attached =
   c(
     "data.table",
     "tidytable",
@@ -39,24 +38,148 @@ packages_to_load =
     "arrow",
     "here",
     "pROC",
-    "geepack",
     "ps"
   )
 
-fn_install_if_mi = function(p) {
-  if (!requireNamespace(p, quietly = TRUE)) {
-    try(install.packages(p, dependencies = TRUE), silent = TRUE)
-  }
+pkgs_required =
+  c(
+    "dplyr",
+    "tibble",
+    "tidyr",
+    "rlang",
+    "lubridate",
+    "yaml",
+    "readxl",
+    "janitor",
+    "comorbidity",
+    "glmmTMB",
+    "geepack",
+    "fst"
+  )
+
+pkgs_checked = c(pkgs_attached, pkgs_required)
+
+# Are we running inside the uvr project library? Sourcing this file from a plain
+# R session would attach whatever the system library happens to hold, which is
+# the exact cross-site version drift uvr exists to prevent, so stop before
+# attaching anything. Backslashes are normalized first so the test behaves
+# identically on Windows.
+
+lib_paths_norm = gsub("\\\\", "/", .libPaths())
+in_uvr_lib     = any(grepl(".uvr/library", lib_paths_norm, fixed = TRUE))
+
+if (!in_uvr_lib) {
+  stop(
+    paste0(
+      "The active R library is not the uvr project library (.uvr/library).\n",
+      "Launch the pipeline through uvr so the locked package set and the pinned ",
+      "R version are active:\n",
+      "  terminal: uvr run code/run_all.R\n",
+      "  RStudio:  uvr::run(\"code/run_all.R\")"
+    ),
+    call. = FALSE
+  )
 }
 
-fn_load_quiet = function(p) {
-  suppressPackageStartupMessages(library(p, character.only = TRUE))
+# Does the running R match the pinned version? The library guard above is not
+# sufficient on its own. uvr 0.4.x links the project library into a plain
+# `Rscript` session, so the packages are correct even when the pipeline is
+# launched outside `uvr run` — but the R VERSION is whatever that shell resolves.
+# Pre-built binaries are compiled against a specific R minor series, so a site
+# whose system R is 4.5.x could link 4.6.1 binaries and run them under 4.5.x
+# without either guard above noticing. That is the same binary-compatibility
+# failure the pin exists to prevent, one layer down.
+#
+# .r-version is the authority. It is absent only in a checkout that predates the
+# pin, which reads as no constraint rather than as a failure, so an older clone
+# does not stop at startup.
+
+r_pin_path = here::here(".r-version")
+r_pinned   = if (file.exists(r_pin_path)) trimws(readLines(r_pin_path, warn = FALSE)[1L]) else NA_character_
+r_running  = paste(R.version$major, R.version$minor, sep = ".")
+
+if (!is.na(r_pinned) && nzchar(r_pinned) && !identical(r_pinned, r_running)) {
+  stop(
+    paste0(
+      "R version mismatch. This pipeline is pinned to R ", r_pinned,
+      " in .r-version, but the running session is R ", r_running, ".\n",
+      "Package binaries are built against a specific R minor version, so results ",
+      "from a mismatched session are not comparable across sites.\n",
+      "Install the pinned version and launch through uvr:\n",
+      "  uvr r install ", r_pinned, "\n",
+      "  uvr run code/run_all.R"
+    ),
+    call. = FALSE
+  )
 }
 
-invisible(lapply(packages_to_install, fn_install_if_mi))
-invisible(lapply(packages_to_load,   fn_load_quiet))
+pkgs_missing =
+  pkgs_checked[
+    !vapply(pkgs_checked, \(p) nzchar(system.file(package = p)), logical(1))
+  ]
+
+if (length(pkgs_missing) > 0) {
+  stop(
+    paste0(
+      "Not found in the uvr project library: ",
+      paste(pkgs_missing, collapse = ", "), ".\n",
+      "The library is out of sync with uvr.lock. Run `uvr sync --frozen` and ",
+      "launch again with `uvr run code/run_all.R`."
+    ),
+    call. = FALSE
+  )
+}
+
+invisible(
+  lapply(pkgs_attached, \(p) suppressPackageStartupMessages(library(p, character.only = TRUE)))
+)
 options(dplyr.summarise.inform = FALSE)
-rm(packages_to_install, packages_to_load, fn_install_if_mi, fn_load_quiet); gc()
+
+# Resolved versions for every checked namespace, not only the attached ones. A
+# version-driven difference between two sites is otherwise invisible after the
+# fact. This table is written to BOX_DIR further down, once the artifact
+# directories exist, because the stage keep-lists delete it at the first stage
+# boundary.
+
+session_packages =
+  data.table::data.table(
+    item  = pkgs_checked,
+    value = vapply(pkgs_checked, \(p) as.character(utils::packageVersion(p)), character(1)),
+    type  = "package"
+  )
+
+session_environment =
+  data.table::data.table(
+    item = c(
+      "r_version",
+      "r_pinned",
+      "platform",
+      "os",
+      "locale",
+      "timezone",
+      "library_path"
+    ),
+    value = c(
+      r_running,
+      r_pinned,
+      R.version$platform,
+      paste(Sys.info()[["sysname"]], Sys.info()[["release"]]),
+      Sys.getlocale("LC_ALL"),
+      Sys.timezone(),
+      .libPaths()[1L]
+    ),
+    type = "environment"
+  )
+
+message(
+  sprintf("Namespaces verified: %d (%d attached, %d reached with ::) | R %s%s",
+          length(pkgs_checked), length(pkgs_attached), length(pkgs_required),
+          r_running,
+          if (is.na(r_pinned)) " (no .r-version pin)" else " (matches .r-version)")
+)
+
+rm(pkgs_attached, pkgs_required, pkgs_checked, pkgs_missing, lib_paths_norm,
+   in_uvr_lib, r_pin_path, r_pinned, r_running); gc()
 
 ## environment -----------------------------------------------------------------
 
@@ -124,13 +247,17 @@ message(
 
 config        = yaml::read_yaml(here("config", "config_clif_oncrisk.yaml"))
 site_details  = fread(here("config", "clif_sites.csv"))
-allowed_sites = tolower(site_details$site_name)
+allowed_sites = tolower(trimws(site_details$site_name))
 allowed_files = c("parquet", "csv", "fst")
 
 ### user enters site details ---------------------------------------------------
 
-site_lowercase   = tolower(config$site_lowercase)
-file_type        = tolower(config$file_type)
+# Both keys are trimmed as well as lowercased. A trailing space in the YAML
+# value would otherwise fail the validators below with a message that reads
+# identical to a correct entry, which is a hard error for a site to diagnose.
+
+site_lowercase   = tolower(trimws(config$site_lowercase))
+file_type        = tolower(trimws(config$file_type))
 tables_location  = config$clif_data_location # here("../_clif_data/v_2.1")
 project_location = config$project_location
 allow_sparse_o2  = config$allow_sparse_o2
@@ -150,8 +277,9 @@ if (!(site_lowercase %in% allowed_sites)) {
     paste0(
       "Invalid '", site_lowercase,
       "'. Expected one of: ",
-      paste(allowed_sites, collapse = ", "), call. = F
-    )
+      paste(allowed_sites, collapse = ", ")
+    ),
+    call. = FALSE
   )
 }
 
@@ -162,8 +290,9 @@ if (!(file_type %in% allowed_files)) {
     paste0(
       "Invalid '", file_type,
       "'. Expected one of: ",
-      paste(allowed_files, collapse = ", "), call. = FALSE
-    )
+      paste(allowed_files, collapse = ", ")
+    ),
+    call. = FALSE
   )
 }
 
@@ -236,6 +365,30 @@ for (sd in box_subdirs) {
 }
 rm(box_subdirs, sd)
 
+### environment manifest -------------------------------------------------------
+# Written here, immediately after the artifact directories exist, because the
+# stage keep-lists delete session_packages and session_environment at the first
+# stage boundary. One long-format table: environment facts first, then one row
+# per verified package. When one site's results diverge from the other seven,
+# this file answers the first question asked, which is whether that site ran a
+# different environment.
+
+env_manifest = data.table::rbindlist(list(session_environment, session_packages))
+env_manifest[, site := site_lowercase]
+
+fwrite(
+  env_manifest,
+  here(BOX_DIR, paste0("env_manifest_", site_lowercase, ".csv"))
+)
+
+message(
+  sprintf("Environment manifest written | R %s | %d packages recorded",
+          env_manifest$value[env_manifest$item == "r_version"],
+          sum(env_manifest$type == "package"))
+)
+
+rm(env_manifest, session_environment, session_packages); gc()
+
 ### dates ----------------------------------------------------------------------
 
 start_date = as.POSIXct("2016-01-01", tz = "UTC") # could be site_time_zone if we care...
@@ -282,7 +435,10 @@ missing_tables     = setdiff(required_tables, clif_table_basenames)
 required_filenames = table_file_map[required_tables]
 
 if (length(missing_tables) > 0) {
-  stop(paste("Error: Missing required tables:", paste(missing_tables, collapse = ", ")))
+  stop(
+    paste("Error: Missing required tables:", paste(missing_tables, collapse = ", ")),
+    call. = FALSE
+  )
 } else {
   message("All required tables are present.")
 }
@@ -297,7 +453,7 @@ if (file_type == "parquet") {
   data_list = lapply(required_filenames, \(f) read_csv_arrow(f))
 } else if (file_type == "fst") {
   data_list = lapply(required_filenames, \(f) {
-    tmp = read.fst(f, as.data.table = TRUE)
+    tmp = fst::read.fst(f, as.data.table = TRUE)
     arrow_table(tmp)
   })
 } else {

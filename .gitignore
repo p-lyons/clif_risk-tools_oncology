@@ -39,3 +39,5 @@ upload_to_box_v2/
 # ignore renv cache
 renv/cache/*
 renv/library
+.uvr/
+.vscode/
