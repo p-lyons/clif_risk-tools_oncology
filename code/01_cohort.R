@@ -1236,6 +1236,58 @@ cohort_hids       = funique(hid_jid_crosswalk$hospitalization_id)
 cohort_jids       = final_jids
 rm(final_jids)
 
+## merge ward intervals into disjoint blocks per encounter ---------------------
+# Up to this point ward_times holds one row per ADT ward stay, so an encounter
+# has several rows and adjacent stays share a boundary timestamp: a ward-to-ward
+# transfer emits out_dttm on the first row equal to in_dttm on the second. The
+# ward restriction in 02_scores.R and 02b_carryforward.R is a closed-interval
+# filter, `time >= in_dttm & time <= out_dttm`, so a score computed at exactly
+# that shared instant satisfies both rows and the encounter carries the same
+# (joined_hosp_id, time) twice. The same happens whenever two ward intervals
+# genuinely overlap, which this pipeline can produce on its own: it reclassifies
+# stepdown to ward across the whole ADT, so a site emitting both a unit-level
+# ward row and an overlapping bed-level stepdown row ends up with two ward
+# intervals over one span. Downstream the duplicate was removed only incidentally,
+# by the terminal funique() in the ward-restriction block, after in_dttm and
+# out_dttm had been overwritten with encounter-level bounds that happened to make
+# the two rows identical.
+#
+# Merging overlapping and touching intervals into disjoint blocks removes the
+# duplicate at its source. The union of covered time is unchanged by construction,
+# so no score row is gained or lost; only the multiplicity changes. Encounters
+# with a genuine off-ward gap (ward, then ICU, then ward) keep separate blocks,
+# because those intervals neither overlap nor touch. hospitalization_id is dropped
+# here: a merged block can span two constituent hospitalizations, and no consumer
+# of ward_times uses the column -- both 02_scores.R and 02b_carryforward.R deleted
+# it immediately after the join.
+
+ward_blocks =
+  fselect(ward_times, joined_hosp_id, in_dttm, out_dttm) |>
+  roworder(joined_hosp_id, in_dttm, out_dttm) |>
+  as.data.table()
+
+ward_blocks[, prior_max_out := shift(cummax(as.numeric(out_dttm))), by = joined_hosp_id]
+ward_blocks[, new_block     := is.na(prior_max_out) | as.numeric(in_dttm) > prior_max_out]
+ward_blocks[, block_id      := cumsum(new_block)]
+
+n_ward_rows_raw = nrow(ward_blocks)
+
+ward_times =
+  fgroup_by(ward_blocks, joined_hosp_id, block_id) |>
+  fsummarize(
+    in_dttm  = fmin(in_dttm),
+    out_dttm = fmax(out_dttm)
+  ) |>
+  fselect(-block_id) |>
+  roworder(joined_hosp_id, in_dttm)
+
+message(sprintf("Ward intervals merged | %s ADT rows -> %s disjoint blocks (%s collapsed).",
+                format(n_ward_rows_raw,  big.mark = ","),
+                format(nrow(ward_times), big.mark = ","),
+                format(n_ward_rows_raw - nrow(ward_times), big.mark = ",")))
+
+rm(ward_blocks, n_ward_rows_raw)
+
 message(sprintf("Cohort restriction | %s encounters | %s hospitalizations kept.",
                 format(fnunique(cohort$joined_hosp_id), big.mark = ","),
                 format(length(cohort_hids),             big.mark = ",")))

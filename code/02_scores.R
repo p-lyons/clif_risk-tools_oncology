@@ -405,13 +405,16 @@ for (col in score_component_cols) {
 #                              encounter (not ward-restricted). P4
 #                              (02c_monitoring.R) counts distinct measurement
 #                              times per 24 ward-hours from this.
-#   ward_times.parquet         The ward-stay intervals, built in 01_cohort.R and
+#   ward_times.parquet         The ward intervals, built in 01_cohort.R and
 #                              otherwise kept only in memory. P3 and P4 need it to
 #                              re-apply the ward restriction after their own
 #                              carry-forward / monitoring steps. Written here
-#                              exactly as this script consumes it: a superset of
-#                              the final cohort's intervals, intersected to cohort
-#                              encounters by the inner join on scores below.
+#                              exactly as this script consumes it. Columns are
+#                              joined_hosp_id, in_dttm, out_dttm: 01 merges
+#                              overlapping and touching ADT ward stays into
+#                              disjoint blocks per encounter, so every score time
+#                              falls inside at most one interval, and drops
+#                              hospitalization_id, which a merged block can span.
 
 write_parquet(scores,         here("proj_tables", "scores_components.parquet"))
 write_parquet(news_o2_stream, here("proj_tables", "news_o2_stream.parquet"))
@@ -576,7 +579,6 @@ scores =
   ftransform(mews_sf_total = mews_total + sf) |>
   join(ward_times, how = "inner", multiple = T) |>
   fsubset(time >= in_dttm & time <= out_dttm) |>
-  select(-hospitalization_id) |>
   fgroup_by(joined_hosp_id, in_dttm, out_dttm, time) |>
   fmax() |>
   fgroup_by(joined_hosp_id) |>
@@ -586,6 +588,24 @@ scores =
   ) |>
   fungroup() |>
   funique()
+
+## QC: one score row per encounter and timestamp -------------------------------
+# Guaranteed by the disjoint ward blocks built in 01_cohort.R. Asserted rather
+# than assumed, because before that merge the funique() above was the only thing
+# removing a score row duplicated across two overlapping or touching intervals,
+# and it removed it silently.
+
+n_score_keys = fnunique(fselect(scores, joined_hosp_id, time))
+
+if (n_score_keys != nrow(scores)) {
+  stop(
+    sprintf("Ward restriction produced %d rows for %d distinct encounter-timestamps.",
+            nrow(scores), n_score_keys),
+    call. = FALSE
+  )
+}
+
+rm(n_score_keys)
 
 # add outcomes -----------------------------------------------------------------
 # P1 rewrote outcome_times to carry, for five outcomes over the competing-

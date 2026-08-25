@@ -136,7 +136,6 @@ build_scores_core = function(vitals_h) {
     ftransform(mews_sf_total = mews_total + sf) |>
     join(ward_times, how = "inner", multiple = T) |>
     fsubset(time >= in_dttm & time <= out_dttm) |>
-    select(-hospitalization_id) |>
     fgroup_by(joined_hosp_id, in_dttm, out_dttm, time) |>
     fmax() |>
     fgroup_by(joined_hosp_id) |>
