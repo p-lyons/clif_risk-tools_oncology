@@ -88,6 +88,7 @@ report = tidytable(
   pct_cancer       = round(100 * run_log$n_cancer / run_log$n_cohort, 1),
   outcome_rate_pct = round(100 * run_log$outcome_rate, 1),
   n_score_rows     = run_log$n_score_rows,
+  n_hid_multi_pt   = run_log$n_hid_multi_patient,
   runtime_min      = round(run_log$total_minutes, 1),
   completed        = Sys.time()
 )

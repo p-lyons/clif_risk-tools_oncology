@@ -85,12 +85,64 @@ message("✅ Reclassified stepdown → ward in ADT")
 
 ### encounters with age >= 18 and dates within study window --------------------
 
+### exclude hospitalizations carrying more than one patient_id ----------------
+# CLIF defines hospitalization_id as a key of one, so a hospitalization_id
+# appearing under two patient_id values is an electronic-health-record artifact
+# rather than a data-model feature. The known mechanism is an unidentified patient
+# admitted under a placeholder chart whose real chart is created alongside it; the
+# two merge on the source system's next refresh, but a snapshot taken before that
+# refresh carries both.
+#
+# Left in place the defect does not surface as duplicate rows, which is why no
+# existing guard catches it. The linkage below groups within patient_id, so one
+# hospitalization under two patients yields two distinct joined_hosp_id values.
+# hid_jid_crosswalk then maps that one hospitalization to both, and every
+# measurement join fans its vitals, labs, and ADT out to both encounters. The
+# group-by collapses that follow all run within joined_hosp_id, so the inflation
+# appears as extra encounters rather than as extra rows.
+#
+# These hospitalizations are dropped rather than resolved to one patient_id. CLIF
+# carries no field that distinguishes the placeholder chart from the real one, and
+# choosing wrong attaches the wrong demographics and the wrong death_dttm to a
+# real encounter, which can convert a ward death into a censored discharge. The
+# count is carried into the run report so the coordinating center can see which
+# sites are affected and at what scale. A site with none sees no change.
+
+hosp_patient_map =
+  dplyr::select(data_list$hospitalization, patient_id, hospitalization_id) |>
+  dplyr::collect() |>
+  distinct()
+
+hid_multi_patient =
+  fcount(hosp_patient_map, hospitalization_id) |>
+  fsubset(N > 1) |>
+  pull(hospitalization_id)
+
+run_log$n_hid_multi_patient = length(hid_multi_patient)
+
+if (length(hid_multi_patient) > 0) {
+  n_multi_rows = nrow(fsubset(hosp_patient_map, hospitalization_id %in% hid_multi_patient))
+  message(
+    sprintf("⚠️  Excluding %s hospitalization_id(s) carrying more than one patient_id (%s chart rows). First few: %s",
+            format(length(hid_multi_patient), big.mark = ","),
+            format(n_multi_rows,              big.mark = ","),
+            paste(head(hid_multi_patient, 10), collapse = ", "))
+  )
+  rm(n_multi_rows)
+} else {
+  message("✅ No hospitalization_id carries more than one patient_id.")
+}
+
+rm(hosp_patient_map)
+
 hosp_blocks =
   dplyr::filter(data_list$hospitalization, age_at_admission >= 18) |>
   dplyr::filter(admission_dttm >= start_date & admission_dttm <= end_date) |>
   dplyr::filter(admission_dttm < discharge_dttm & !is.na(discharge_dttm)) |>
   dplyr::select(patient_id, hospitalization_id, admission_dttm, discharge_dttm) |>
   dplyr::collect() |>
+  distinct() |>
+  fsubset(!hospitalization_id %in% hid_multi_patient) |>
   roworder(patient_id, admission_dttm)
 
 ### use data.table to find joined hospitalizations with <= 6h gaps -------------
@@ -209,7 +261,13 @@ rm(inpatient_hids, inpatient_jids, drop_ob, drop_ob_jids, has_vital_signs, hosp_
 cohort_data =
   dplyr::filter(data_list$hospitalization, hospitalization_id %in% cohort_hids) |>
   dplyr::select(ends_with("id"), age_at_admission, discharge_category) |>
-  dplyr::collect()
+  dplyr::collect() |>
+  distinct()
+
+# The distinct() above absorbs exactly repeated chart rows, and the multi-patient
+# exclusion above removes the placeholder-chart case, so anything still reaching
+# this guard is a hospitalization whose attribute rows genuinely conflict. That is
+# a defect worth halting on rather than resolving silently.
 
 hid_dups_source =
   fcount(cohort_data, hospitalization_id) |>
