@@ -310,6 +310,21 @@ Ensure your site identifier appears in `config/clif_sites.csv`. Setup stops with
 >
 > The second guard is not redundant. uvr 0.4.x links the project library into a plain `Rscript` session, so packages resolve correctly even outside `uvr run` — but the R version in that case is whatever the shell finds, which at a site with an older system R would run 4.6.1 binaries under 4.5.x. `uvr run` is still the supported launch path; the version guard is what makes a mistake visible.
 
+### Upgrading from an earlier round-two checkout
+
+If this machine ever ran an earlier round-two version of the pipeline, delete the
+output directory before the first run of this version:
+
+```bash
+rm -rf upload_to_box_v2
+```
+
+Earlier versions wrote artifact families this version no longer produces (a
+`meta/` directory, `dxgroup` strata). The pipeline only deletes files it
+regenerates, and the manifest lists **everything** in `upload_to_box_v2/`, so
+stale files from an old run would otherwise ship to the coordinating center.
+A clean directory costs nothing: `00_setup.R` recreates the structure.
+
 ### Standard Execution
 
 ```bash
@@ -348,7 +363,7 @@ source("code/03b_leadtime.R")
 
 ### Expected Runtime
 
-Runtime scales with encounter and vitals/lab volume. For orientation, a site of roughly 145,000 encounters completes the full pipeline in about six minutes; larger sites take proportionally longer. The first `uvr sync --frozen` adds a few minutes once, and subsequent syncs are near-instant.
+Runtime scales with encounter and vitals/lab volume. For orientation, a site of roughly 145,000 encounters completes the full pipeline in about 30 minutes (the bootstrap and the fixed-horizon families dominate); larger sites take proportionally longer. The first `uvr sync --frozen` adds a few minutes once, and subsequent syncs are near-instant.
 
 | Stage | Notes |
 |-------|-------|
@@ -447,6 +462,7 @@ Elixhauser comorbidities via the Quan ICD-10 algorithm, summarized by the van Wa
 | `proj_tables/careprocess.parquet` | Vasopressor and respiratory-support events |
 | `proj_tables/hid_jid_crosswalk.parquet` | Hospitalization-ID mapping |
 | `<BOX_DIR>/cancer_codes_primary_<site>.csv` | Primary cancer-code frequencies (n > 5) |
+| `<BOX_DIR>/hospital_types_<site>.csv` | Hospital counts by type; one type per hospital by majority vote over non-missing ADT rows |
 | `<BOX_DIR>/figure_s01_flow_<site>.csv` | Inclusion flow-diagram counts (a final row is appended in `02`) |
 
 ---
