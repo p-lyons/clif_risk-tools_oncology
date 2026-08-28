@@ -484,12 +484,41 @@ fwrite(
 # hospital_type (academic / community / LTACH, from the ADT table), counting
 # distinct hospital_id values among the hospitalizations still in the cohort at
 # this point. Counts only; no hospital identifiers leave the site.
+#
+# A hospital_id can carry more than one hospital_type across its ADT rows
+# (entry errors, or rows where the field is blank). Counting distinct
+# (hospital_id, hospital_type) pairs would then count the same hospital more
+# than once. Each hospital is therefore assigned ONE type by majority vote
+# across its non-missing ADT rows, and blank types are ignored; a console
+# message reports any hospital whose rows carried conflicting types.
 
-hospital_types =
+hospital_type_rows =
   dplyr::filter(data_list$adt, hospitalization_id %in% cohort_hids) |>
   dplyr::select(hospital_id, hospital_type) |>
-  dplyr::distinct() |>
   dplyr::collect() |>
+  fsubset(!is.na(hospital_type) & hospital_type != "")
+
+hospital_type_counts =
+  fcount(hospital_type_rows, hospital_id, hospital_type)
+
+n_conflicted =
+  fnunique(hospital_type_counts$hospital_id[
+    hospital_type_counts$hospital_id %in%
+      hospital_type_counts$hospital_id[duplicated(hospital_type_counts$hospital_id)]
+  ])
+
+if (n_conflicted > 0) {
+  message(
+    sprintf("⚠️  %d hospital_id(s) carry more than one hospital_type in ADT; resolved by majority vote.",
+            n_conflicted)
+  )
+}
+
+hospital_types =
+  roworder(hospital_type_counts, hospital_id, -N) |>
+  fgroup_by(hospital_id) |>
+  ffirst() |>
+  fungroup() |>
   fgroup_by(hospital_type) |>
   fsummarize(n_hospitals = fnunique(hospital_id)) |>
   ftransform(site = site_lowercase)
@@ -499,7 +528,7 @@ fwrite(
   here(BOX_DIR, paste0("hospital_types_", site_lowercase, ".csv"))
 )
 
-rm(hospital_types)
+rm(hospital_type_rows, hospital_type_counts, n_conflicted, hospital_types)
 
 ### tally for inclusion flow diagram -------------------------------------------
 
