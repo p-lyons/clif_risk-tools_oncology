@@ -11,8 +11,6 @@ r_version = ">= 4.6.0"
 # data.table   fread / fwrite / setDT throughout
 # dplyr        namespace-qualified verbs over Arrow datasets, 00 and 03a
 # fst          read.fst for sites whose file_type is "fst", 00
-# geepack      geeglm longitudinal models, 03c
-# glmmTMB      random-effects meta-analysis inputs and cluster bootstrap, 03a
 # here         project-root path resolution, every script
 # janitor      get_dupes and clean_names, 01
 # lubridate    dhours / ddays / year arithmetic, 01
@@ -33,8 +31,6 @@ comorbidity = "*"
 "data.table" = "*"
 dplyr = "*"
 fst = "*"
-geepack = "*"
-glmmTMB = "*"
 here = "*"
 janitor = "*"
 lubridate = "*"

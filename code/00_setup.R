@@ -26,8 +26,7 @@
 # Every namespace the pipeline touches is verified here, before stage 01, so a
 # site missing one package fails in the first seconds rather than an hour into
 # the run. pkgs_attached is attached with library(). pkgs_required is verified
-# present and reached with :: at its call sites. glmmTMB (03a) and geepack (03c)
-# attach themselves where they are used; both are verified now regardless.
+# present and reached with :: at its call sites.
 
 pkgs_attached =
   c(
@@ -52,8 +51,6 @@ pkgs_required =
     "readxl",
     "janitor",
     "comorbidity",
-    "glmmTMB",
-    "geepack",
     "fst"
   )
 
@@ -298,14 +295,14 @@ if (!(file_type %in% allowed_files)) {
 
 ### allow_sparse_o2 must be a single TRUE or FALSE -----------------------------
 # This key governs the sparse-oxygen guard in 02_scores.R. That guard stops the
-# run when more than 90% of NEWS2 score rows have no supplemental-oxygen
+# run when more than 90% of NEWS score rows have no supplemental-oxygen
 # measurement within 6h, which means lpm_set and fio2_set are present as columns
 # in respiratory_support but are effectively empty. Setting
 #
 #   allow_sparse_o2: true
 #
 # in config/config_clif_oncrisk.yaml downgrades that stop to a warning, and the
-# run then finishes with NEWS2 scored without its supplemental-oxygen item. A
+# run then finishes with NEWS scored without its supplemental-oxygen item. A
 # site should set it only after the coordinating center has confirmed that its
 # oxygen data are genuinely absent. The key is optional: a config file predating
 # it reads as FALSE, so no site fails at startup for holding an older copy.
@@ -354,10 +351,10 @@ if (!dir.exists(here(BOX_DIR))) {
   dir.create(here(BOX_DIR), recursive = TRUE)
 }
 
-# Round-two artifacts are organized into six analysis subdirectories. Creating
+# Round-two artifacts are organized into five analysis subdirectories. Creating
 # them here means no script needs a defensive dir.create at write time, and a
 # site can see the expected layout before the run produces anything.
-box_subdirs = c("main", "threshold", "sensitivity", "horizon", "diagnostics", "meta")
+box_subdirs = c("main", "threshold", "sensitivity", "horizon", "diagnostics")
 for (sd in box_subdirs) {
   if (!dir.exists(here(BOX_DIR, sd))) {
     dir.create(here(BOX_DIR, sd), recursive = TRUE)

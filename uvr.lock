@@ -2,35 +2,6 @@
 version = "4.6.1"
 
 [[package]]
-name = "Deriv"
-version = "4.3.0"
-source = "cran"
-raw_version = "4.3.0"
-url = "https://cran.r-project.org/src/contrib/Deriv_4.3.0.tar.gz"
-checksum = "md5:379732250a50bde145f56415bda818f6"
-requires = [
-    "Rcpp",
-    "Rcpp",
-]
-
-[[package]]
-name = "MASS"
-version = "7.3.66"
-source = "cran"
-raw_version = "7.3-66"
-url = "https://cran.r-project.org/src/contrib/MASS_7.3-66.tar.gz"
-checksum = "md5:272648f9e6c9f1855417b099ea03ee46"
-
-[[package]]
-name = "Matrix"
-version = "1.7.6"
-source = "cran"
-raw_version = "1.7-6"
-url = "https://cran.r-project.org/src/contrib/Matrix_1.7-6.tar.gz"
-checksum = "md5:92502b5e17bc36390d9e52c0f2c2e0f0"
-requires = ["lattice"]
-
-[[package]]
 name = "R6"
 version = "2.6.1"
 source = "cran"
@@ -39,74 +10,12 @@ url = "https://cran.r-project.org/src/contrib/R6_2.6.1.tar.gz"
 checksum = "md5:f01b1787f12797c29194d63c9afd5d70"
 
 [[package]]
-name = "RColorBrewer"
-version = "1.1.3"
-source = "cran"
-raw_version = "1.1-3"
-url = "https://cran.r-project.org/src/contrib/RColorBrewer_1.1-3.tar.gz"
-checksum = "md5:9b687595bbe02a7e43fc195ba33f065c"
-
-[[package]]
 name = "Rcpp"
 version = "1.1.2"
 source = "cran"
 raw_version = "1.1.2"
 url = "https://cran.r-project.org/src/contrib/Rcpp_1.1.2.tar.gz"
 checksum = "md5:353d35176db9c570705a0a324c06fdca"
-
-[[package]]
-name = "RcppArmadillo"
-version = "15.4.2-4.1"
-source = "cran"
-raw_version = "15.4.2-1"
-url = "https://cran.r-project.org/src/contrib/RcppArmadillo_15.4.2-1.tar.gz"
-checksum = "md5:b446a94020b100db656ff06e30d2f52f"
-requires = [
-    "Rcpp",
-    "Rcpp",
-]
-
-[[package]]
-name = "RcppEigen"
-version = "0.3.4-4.0.2"
-source = "cran"
-raw_version = "0.3.4.0.2"
-url = "https://cran.r-project.org/src/contrib/RcppEigen_0.3.4.0.2.tar.gz"
-checksum = "md5:d636083ce19deae8f32883170314f2ea"
-requires = [
-    "Rcpp",
-    "Rcpp",
-]
-
-[[package]]
-name = "Rdpack"
-version = "2.6.6"
-source = "cran"
-raw_version = "2.6.6"
-url = "https://cran.r-project.org/src/contrib/Rdpack_2.6.6.tar.gz"
-checksum = "md5:3259eb847df896eff1d6f9aed7cf7497"
-requires = ["rbibutils"]
-
-[[package]]
-name = "S7"
-version = "0.2.2"
-source = "cran"
-raw_version = "0.2.2"
-url = "https://cran.r-project.org/src/contrib/S7_0.2.2.tar.gz"
-checksum = "md5:6a40d3eae470be0f06a03737b9391269"
-
-[[package]]
-name = "TMB"
-version = "1.9.25"
-source = "cran"
-raw_version = "1.9.25"
-url = "https://cran.r-project.org/src/contrib/TMB_1.9.25.tar.gz"
-checksum = "md5:9121e567d70233c6cfeb99d6a049f906"
-requires = [
-    "Matrix",
-    "Matrix",
-    "RcppEigen",
-]
 
 [[package]]
 name = "arrow"
@@ -161,35 +70,6 @@ checksum = "md5:a02c94b7ea2637da988127cb12933fbf"
 requires = ["bit"]
 
 [[package]]
-name = "boot"
-version = "1.3.32"
-source = "cran"
-raw_version = "1.3-32"
-url = "https://cran.r-project.org/src/contrib/boot_1.3-32.tar.gz"
-checksum = "md5:c883de096f9a6b3afbf461337092a1f3"
-
-[[package]]
-name = "broom"
-version = "1.0.13"
-source = "cran"
-raw_version = "1.0.13"
-url = "https://cran.r-project.org/src/contrib/broom_1.0.13.tar.gz"
-checksum = "md5:f18019fa804c6a0f47eb5b83c0cc5bb8"
-requires = [
-    "backports",
-    "cli",
-    "dplyr",
-    "generics",
-    "glue",
-    "lifecycle",
-    "purrr",
-    "rlang",
-    "stringr",
-    "tibble",
-    "tidyr",
-]
-
-[[package]]
 name = "cellranger"
 version = "1.1.0"
 source = "cran"
@@ -231,14 +111,6 @@ requires = [
 ]
 
 [[package]]
-name = "colorspace"
-version = "2.1.3"
-source = "cran"
-raw_version = "2.1-3"
-url = "https://cran.r-project.org/src/contrib/colorspace_2.1-3.tar.gz"
-checksum = "md5:44beb9a1ff66bf35b44663b4fa7ef2ae"
-
-[[package]]
 name = "comorbidity"
 version = "1.1.0"
 source = "cran"
@@ -249,20 +121,6 @@ requires = [
     "checkmate",
     "data.table",
     "stringi",
-]
-
-[[package]]
-name = "cowplot"
-version = "1.2.0"
-source = "cran"
-raw_version = "1.2.0"
-url = "https://cran.r-project.org/src/contrib/cowplot_1.2.0.tar.gz"
-checksum = "md5:78d3f716e640c993b3958dab2690bcb6"
-requires = [
-    "ggplot2",
-    "gtable",
-    "rlang",
-    "scales",
 ]
 
 [[package]]
@@ -283,35 +141,11 @@ checksum = "md5:bb290c70d23b2200006187ac7839116f"
 
 [[package]]
 name = "data.table"
-version = "1.18.4"
+version = "1.18.6-4.1"
 source = "cran"
-raw_version = "1.18.4"
-url = "https://cran.r-project.org/src/contrib/data.table_1.18.4.tar.gz"
-checksum = "md5:8802d3e9516d5b38dd4aa1a473e2ac6e"
-
-[[package]]
-name = "doBy"
-version = "4.7.2"
-source = "cran"
-raw_version = "4.7.2"
-url = "https://cran.r-project.org/src/contrib/doBy_4.7.2.tar.gz"
-checksum = "md5:24e2764844cfed461a0cd032f9de71ed"
-requires = [
-    "boot",
-    "broom",
-    "cowplot",
-    "Deriv",
-    "dplyr",
-    "forecast",
-    "ggplot2",
-    "MASS",
-    "Matrix",
-    "modelr",
-    "rlang",
-    "purrr",
-    "tibble",
-    "tidyr",
-]
+raw_version = "1.18.6.1"
+url = "https://cran.r-project.org/src/contrib/data.table_1.18.6.1.tar.gz"
+checksum = "md5:0c0ad7916017c1657610ab16c36fecdd"
 
 [[package]]
 name = "dplyr"
@@ -333,46 +167,6 @@ requires = [
     "tidyselect",
     "vctrs",
 ]
-
-[[package]]
-name = "farver"
-version = "2.1.2"
-source = "cran"
-raw_version = "2.1.2"
-url = "https://cran.r-project.org/src/contrib/farver_2.1.2.tar.gz"
-checksum = "md5:1fa98878bb985e28d968630c7e7597b6"
-
-[[package]]
-name = "forecast"
-version = "9.0.2"
-source = "cran"
-raw_version = "9.0.2"
-url = "https://cran.r-project.org/src/contrib/forecast_9.0.2.tar.gz"
-checksum = "md5:0a7c84e9792cfd6307e25ba1f7ba0f44"
-requires = [
-    "colorspace",
-    "fracdiff",
-    "generics",
-    "ggplot2",
-    "lmtest",
-    "magrittr",
-    "nnet",
-    "Rcpp",
-    "timeDate",
-    "urca",
-    "withr",
-    "zoo",
-    "Rcpp",
-    "RcppArmadillo",
-]
-
-[[package]]
-name = "fracdiff"
-version = "1.5.4"
-source = "cran"
-raw_version = "1.5-4"
-url = "https://cran.r-project.org/src/contrib/fracdiff_1.5-4.tar.gz"
-checksum = "md5:963d73ba845fabf38a737b6929abecfd"
 
 [[package]]
 name = "fst"
@@ -401,19 +195,6 @@ requires = [
 ]
 
 [[package]]
-name = "geepack"
-version = "1.3.13"
-source = "cran"
-raw_version = "1.3.13"
-url = "https://cran.r-project.org/src/contrib/geepack_1.3.13.tar.gz"
-checksum = "md5:5465b7024fad454118eef2bb63404b6f"
-requires = [
-    "MASS",
-    "broom",
-    "magrittr",
-]
-
-[[package]]
 name = "generics"
 version = "0.1.4"
 source = "cran"
@@ -422,66 +203,12 @@ url = "https://cran.r-project.org/src/contrib/generics_0.1.4.tar.gz"
 checksum = "md5:dda54b65216fe3c53571d2adaddc7461"
 
 [[package]]
-name = "ggplot2"
-version = "4.0.3"
-source = "cran"
-raw_version = "4.0.3"
-url = "https://cran.r-project.org/src/contrib/ggplot2_4.0.3.tar.gz"
-checksum = "md5:c50d6864f6226ed9759e5deaa0a25e7f"
-requires = [
-    "cli",
-    "gtable",
-    "isoband",
-    "lifecycle",
-    "rlang",
-    "S7",
-    "scales",
-    "vctrs",
-    "withr",
-]
-
-[[package]]
-name = "glmmTMB"
-version = "1.1.14"
-source = "cran"
-raw_version = "1.1.14"
-url = "https://cran.r-project.org/src/contrib/glmmTMB_1.1.14.tar.gz"
-checksum = "md5:adfb0befff58ba57647c796498adc0d0"
-requires = [
-    "TMB",
-    "lme4",
-    "Matrix",
-    "nlme",
-    "numDeriv",
-    "mgcv",
-    "reformulas",
-    "pbkrtest",
-    "sandwich",
-    "TMB",
-    "RcppEigen",
-]
-
-[[package]]
 name = "glue"
 version = "1.8.1"
 source = "cran"
 raw_version = "1.8.1"
 url = "https://cran.r-project.org/src/contrib/glue_1.8.1.tar.gz"
 checksum = "md5:24e3cd382f52015c929538a5208d11aa"
-
-[[package]]
-name = "gtable"
-version = "0.3.6"
-source = "cran"
-raw_version = "0.3.6"
-url = "https://cran.r-project.org/src/contrib/gtable_0.3.6.tar.gz"
-checksum = "md5:545f07ada570ec8e3f4b22843974ac6d"
-requires = [
-    "cli",
-    "glue",
-    "lifecycle",
-    "rlang",
-]
 
 [[package]]
 name = "here"
@@ -508,19 +235,6 @@ requires = [
 ]
 
 [[package]]
-name = "isoband"
-version = "0.3.0"
-source = "cran"
-raw_version = "0.3.0"
-url = "https://cran.r-project.org/src/contrib/isoband_0.3.0.tar.gz"
-checksum = "md5:0b811a225740b6e4ae0afcdd64f11407"
-requires = [
-    "cli",
-    "rlang",
-    "cpp11",
-]
-
-[[package]]
 name = "janitor"
 version = "2.2.1"
 source = "cran"
@@ -543,22 +257,6 @@ requires = [
 ]
 
 [[package]]
-name = "labeling"
-version = "0.4.3"
-source = "cran"
-raw_version = "0.4.3"
-url = "https://cran.r-project.org/src/contrib/labeling_0.4.3.tar.gz"
-checksum = "md5:915e6c823c1d8243641ce97253389f14"
-
-[[package]]
-name = "lattice"
-version = "0.23.1"
-source = "cran"
-raw_version = "0.23-1"
-url = "https://cran.r-project.org/src/contrib/lattice_0.23-1.tar.gz"
-checksum = "md5:e449ab6441f74836e93869dd34cdf3ba"
-
-[[package]]
 name = "lifecycle"
 version = "1.0.5"
 source = "cran"
@@ -569,37 +267,6 @@ requires = [
     "cli",
     "rlang",
 ]
-
-[[package]]
-name = "lme4"
-version = "2.0.6"
-source = "cran"
-raw_version = "2.0-6"
-url = "https://cran.r-project.org/src/contrib/lme4_2.0-6.tar.gz"
-checksum = "md5:cf60da58c196ac7f2ac8094b6a13b6ce"
-requires = [
-    "Matrix",
-    "MASS",
-    "Rdpack",
-    "boot",
-    "lattice",
-    "minqa",
-    "nlme",
-    "nloptr",
-    "reformulas",
-    "Matrix",
-    "Rcpp",
-    "RcppEigen",
-]
-
-[[package]]
-name = "lmtest"
-version = "0.9.40"
-source = "cran"
-raw_version = "0.9-40"
-url = "https://cran.r-project.org/src/contrib/lmtest_0.9-40.tar.gz"
-checksum = "md5:f3ae15407707b219b2bdc5c72405d21b"
-requires = ["zoo"]
 
 [[package]]
 name = "lubridate"
@@ -622,107 +289,15 @@ url = "https://cran.r-project.org/src/contrib/magrittr_2.0.5.tar.gz"
 checksum = "md5:4ee23a88bc1589527696d777d7e68dfc"
 
 [[package]]
-name = "mgcv"
-version = "1.9.4"
-source = "cran"
-raw_version = "1.9-4"
-url = "https://cran.r-project.org/src/contrib/mgcv_1.9-4.tar.gz"
-checksum = "md5:bcf455bf12d6ed0216e767f4911a9af9"
-requires = [
-    "nlme",
-    "Matrix",
-]
-
-[[package]]
-name = "minqa"
-version = "1.2.8"
-source = "cran"
-raw_version = "1.2.8"
-url = "https://cran.r-project.org/src/contrib/minqa_1.2.8.tar.gz"
-checksum = "md5:220bfece6840be5600cce3cb24850cdf"
-requires = [
-    "Rcpp",
-    "Rcpp",
-]
-
-[[package]]
-name = "modelr"
-version = "0.1.11"
-source = "cran"
-raw_version = "0.1.11"
-url = "https://cran.r-project.org/src/contrib/modelr_0.1.11.tar.gz"
-checksum = "md5:ddfa4fdf1446004a7b75289eb81e8548"
-requires = [
-    "broom",
-    "magrittr",
-    "purrr",
-    "rlang",
-    "tibble",
-    "tidyr",
-    "tidyselect",
-    "vctrs",
-]
-
-[[package]]
-name = "nlme"
-version = "3.1.170"
-source = "cran"
-raw_version = "3.1-170"
-url = "https://cran.r-project.org/src/contrib/nlme_3.1-170.tar.gz"
-checksum = "md5:1cca4f944fb0f0da191eeaf965bba912"
-requires = ["lattice"]
-
-[[package]]
-name = "nloptr"
-version = "2.2.1"
-source = "cran"
-raw_version = "2.2.1"
-url = "https://cran.r-project.org/src/contrib/nloptr_2.2.1.tar.gz"
-checksum = "md5:8c5a33535268e9ede837d070b86160eb"
-
-[[package]]
-name = "nnet"
-version = "7.3.21"
-source = "cran"
-raw_version = "7.3-21"
-url = "https://cran.r-project.org/src/contrib/nnet_7.3-21.tar.gz"
-checksum = "md5:63b195beb45883dd357387ee29164607"
-
-[[package]]
-name = "numDeriv"
-version = "2016.8.1-4.1"
-source = "cran"
-raw_version = "2016.8-1.1"
-url = "https://cran.r-project.org/src/contrib/numDeriv_2016.8-1.1.tar.gz"
-checksum = "md5:f894081f6d73822a362f156e849c9657"
-
-[[package]]
 name = "pROC"
-version = "1.19.0-4.1"
+version = "1.19.1"
 source = "cran"
-raw_version = "1.19.0.1"
-url = "https://cran.r-project.org/src/contrib/pROC_1.19.0.1.tar.gz"
-checksum = "md5:7a755bd5c670c18e5bd0bfd1aa4b07d8"
+raw_version = "1.19.1"
+url = "https://cran.r-project.org/src/contrib/pROC_1.19.1.tar.gz"
+checksum = "md5:94651e3d67bbed63f93b53cc5c935bca"
 requires = [
     "Rcpp",
     "Rcpp",
-]
-
-[[package]]
-name = "pbkrtest"
-version = "0.5.5"
-source = "cran"
-raw_version = "0.5.5"
-url = "https://cran.r-project.org/src/contrib/pbkrtest_0.5.5.tar.gz"
-checksum = "md5:8df1c5b2fdd2ddd3237f1a4c07bbb365"
-requires = [
-    "lme4",
-    "broom",
-    "dplyr",
-    "MASS",
-    "numDeriv",
-    "Matrix",
-    "doBy",
 ]
 
 [[package]]
@@ -796,14 +371,6 @@ requires = [
 ]
 
 [[package]]
-name = "rbibutils"
-version = "2.4.1"
-source = "cran"
-raw_version = "2.4.1"
-url = "https://cran.r-project.org/src/contrib/rbibutils_2.4.1.tar.gz"
-checksum = "md5:dad8207e52a80a5a4a11b22339aae112"
-
-[[package]]
 name = "readxl"
 version = "1.5.0"
 source = "cran"
@@ -815,18 +382,6 @@ requires = [
     "tibble",
     "cpp11",
     "progress",
-]
-
-[[package]]
-name = "reformulas"
-version = "0.4.4"
-source = "cran"
-raw_version = "0.4.4"
-url = "https://cran.r-project.org/src/contrib/reformulas_0.4.4.tar.gz"
-checksum = "md5:280fedda4433e3ec798cb36103f75b92"
-requires = [
-    "Matrix",
-    "Rdpack",
 ]
 
 [[package]]
@@ -852,34 +407,6 @@ source = "cran"
 raw_version = "2.1.1"
 url = "https://cran.r-project.org/src/contrib/rprojroot_2.1.1.tar.gz"
 checksum = "md5:307fef4f932acc1d8660a857e44d5fb7"
-
-[[package]]
-name = "sandwich"
-version = "3.1.3"
-source = "cran"
-raw_version = "3.1-3"
-url = "https://cran.r-project.org/src/contrib/sandwich_3.1-3.tar.gz"
-checksum = "md5:f66564422dfbed1b7fe2c38ac2e49dd8"
-requires = ["zoo"]
-
-[[package]]
-name = "scales"
-version = "1.4.0"
-source = "cran"
-raw_version = "1.4.0"
-url = "https://cran.r-project.org/src/contrib/scales_1.4.0.tar.gz"
-checksum = "md5:6dd61123ecc2be3e3777aa77c172261d"
-requires = [
-    "cli",
-    "farver",
-    "glue",
-    "labeling",
-    "lifecycle",
-    "R6",
-    "RColorBrewer",
-    "rlang",
-    "viridisLite",
-]
 
 [[package]]
 name = "snakecase"
@@ -992,14 +519,6 @@ requires = [
 ]
 
 [[package]]
-name = "timeDate"
-version = "4052.112.0"
-source = "cran"
-raw_version = "4052.112"
-url = "https://cran.r-project.org/src/contrib/timeDate_4052.112.tar.gz"
-checksum = "md5:354e0ef7bec83cc6d14d3106529043cc"
-
-[[package]]
 name = "timechange"
 version = "0.4.0"
 source = "cran"
@@ -1007,15 +526,6 @@ raw_version = "0.4.0"
 url = "https://cran.r-project.org/src/contrib/timechange_0.4.0.tar.gz"
 checksum = "md5:4cabacecbed68e3beb00e47d42fc9fca"
 requires = ["cpp11"]
-
-[[package]]
-name = "urca"
-version = "1.3.4"
-source = "cran"
-raw_version = "1.3-4"
-url = "https://cran.r-project.org/src/contrib/urca_1.3-4.tar.gz"
-checksum = "md5:9bcc2ab304c406a66f494f34a02ed1d7"
-requires = ["nlme"]
 
 [[package]]
 name = "utf8"
@@ -1040,14 +550,6 @@ requires = [
 ]
 
 [[package]]
-name = "viridisLite"
-version = "0.4.3"
-source = "cran"
-raw_version = "0.4.3"
-url = "https://cran.r-project.org/src/contrib/viridisLite_0.4.3.tar.gz"
-checksum = "md5:ecfcfd15db2d5a79c25b9514748762b5"
-
-[[package]]
 name = "withr"
 version = "3.0.3"
 source = "cran"
@@ -1062,12 +564,3 @@ source = "cran"
 raw_version = "2.3.12"
 url = "https://cran.r-project.org/src/contrib/yaml_2.3.12.tar.gz"
 checksum = "md5:6beea9b09717960f6c79fcbc1e129c41"
-
-[[package]]
-name = "zoo"
-version = "1.9.0"
-source = "cran"
-raw_version = "1.9-0"
-url = "https://cran.r-project.org/src/contrib/zoo_1.9-0.tar.gz"
-checksum = "md5:fba440a280e772990f55aeec7257ef85"
-requires = ["lattice"]

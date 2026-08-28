@@ -4,13 +4,16 @@
 # rather than hard-coded values, and adds an estimability rule to the AUROC
 # artifacts. Discharges the outcome-decomposition (R1/R4), calibration (R4.3),
 # operating-characteristics (R2.6/R4.2), subgroup (R4.5), and heterogeneity
-# (R4.8) requests.
+# (R4.8) requests. The round-one score x cancer interaction export (glmmTMB
+# meta/coefficients, meta/score_sds) was removed in this revision: the
+# threshold-equivalence analyses supersede it in the manuscript, and no
+# reported result depends on it.
 #
 # ==============================================================================
 # PART 1 of 3 — constants, specification objects, and self-contained helpers.
 #   Part 2: data prep + parameterized materializers + round-one reproduction.
 #   Part 3: run matrix (threshold block, variant loop, STRATA iteration,
-#           event tally, meta) + cleanup.
+#           event tally, bootstrap) + cleanup.
 # This part contains definitions only; sourcing it does no work.
 # ==============================================================================
 
@@ -54,12 +57,12 @@ OUTCOMES = tidytable(
 )
 
 # stratum specification. group_col is the column the stratum splits on; subset is
-# the encounter filter applied before splitting. liquid_01/mets_01/rank_enc are
-# joined from cohort.parquet in Part 2 (scores_full carries only ca_01/ed_admit).
+# the encounter filter applied before splitting. liquid_01/mets_01 are joined
+# from cohort.parquet in Part 2 (scores_full carries only ca_01/ed_admit).
 STRATA = tidytable(
-  key       = c("ca", "liquid", "mets", "dxgroup"),
-  group_col = c("ca_01", "liquid_01", "mets_01", "rank_enc"),
-  subset    = c("all", "ca_01 == 1", "ca_01 == 1 & liquid_01 == 0", "ca_01 == 1")
+  key       = c("ca", "liquid", "mets"),
+  group_col = c("ca_01", "liquid_01", "mets_01"),
+  subset    = c("all", "ca_01 == 1", "ca_01 == 1 & liquid_01 == 0")
 )
 
 # allowed artifacts per analysis subdirectory. "events" (Part 3) is the
@@ -69,8 +72,7 @@ STRATA = tidytable(
   threshold   = c("ever", "sesp", "cuminc", "first", "upset"),
   sensitivity = c("maxscores", "counts", "auroc"),
   horizon     = c("counts", "auroc"),
-  diagnostics = c("overall", "by_cancer", "max_scores"),
-  meta        = c("coefficients", "score_sds")
+  diagnostics = c("overall", "by_cancer", "max_scores")
 )
 
 # filename build + parse -------------------------------------------------------
@@ -452,14 +454,14 @@ materialize_variant_long = function(variant, scores, fc, outcome, stratum) {
 .verify_composite_reproduction(scores, fc, site_lowercase)
 
 # ==============================================================================
-# END PART 2  (Part 3: run matrix + threshold block + event tally + meta)
+# END PART 2  (Part 3: run matrix + threshold block + event tally + bootstrap)
 # ==============================================================================
 
 # ==============================================================================
 # PART 3 of 3 (3a) — run matrix: maxscores / auroc / counts / events.
-# The threshold block (ever/sesp/cuminc/first/upset) and the meta-analysis inputs
-# (coefficients/score_sds) + bootstrap are ports of the round-one blocks with the
-# per-outcome flag swap, and follow in Part 3b.
+# The threshold block (ever/sesp/cuminc/first/upset) and the bootstrap are
+# ports of the round-one blocks with the per-outcome flag swap, and follow in
+# Part 3b.
 # ==============================================================================
 
 # artifact writer: builds the name, checks it round-trips, writes ---------------
@@ -596,7 +598,7 @@ run_artifact_matrix = function(scores, fc, site_lowercase) {
   }
 
   # Row 3 — subgroups, composite + nohospice, main variant (h24 counts only)
-  for (sk in c("liquid", "mets", "dxgroup")) {
+  for (sk in c("liquid", "mets")) {
     st = STRATA[key == sk]
     for (k in c("composite", "nohospice")) {
       oc = OUTCOMES[key == k]
@@ -606,7 +608,7 @@ run_artifact_matrix = function(scores, fc, site_lowercase) {
   }
 
   # Row 4 — subgroups, all five outcomes, event tally only (no AUROC)
-  for (sk in c("liquid", "mets", "dxgroup")) {
+  for (sk in c("liquid", "mets")) {
     st = STRATA[key == sk]
     for (k in OUTCOMES$key) {
       oc = OUTCOMES[key == k]
@@ -662,14 +664,14 @@ if (!is.null(firstscore)) {
   message(sprintf("  first-ward score distribution: %d rows (score x cancer x value)", nrow(firstscore)))
 }
 
-# Part 3b (threshold block + meta inputs + bootstrap) continues below.
+# Part 3b (threshold block + bootstrap) continues below.
 
 # ==============================================================================
 # END PART 3a
 # ==============================================================================
 
 # ==============================================================================
-# PART 3b — threshold block (ca, per outcome) + meta-analysis inputs + bootstrap.
+# PART 3b — threshold block (ca and liquid, per outcome) + bootstrap.
 # Ported from round-one 03_analysis.R. The score-crossing computations
 # (ever_positive, firsts) are outcome-independent and computed once; the
 # outcome-dependent aggregations loop over the five outcomes. D3: the outcome
@@ -683,7 +685,7 @@ outcome_tt = as.data.table(read_parquet(here("proj_tables", "outcome_times.parqu
 
 all_encs_base =
   fsubset(cohort, ed_admit_01 == 1) |>
-  select(joined_hosp_id, ca_01) |>
+  select(joined_hosp_id, ca_01, liquid_01) |>
   join(
     select(outcome_tt, joined_hosp_id,
            o_composite_01, o_nohospice_01, o_wardicu_01, o_warddeath_01, o_hospicedc_01),
@@ -928,95 +930,58 @@ for (k in OUTCOMES$key) {
 }
 
 # ==============================================================================
-# META-ANALYSIS INPUTS (composite / ca / main) + BOOTSTRAP
-# Ported from round one; composite-only, as before.
+# THRESHOLD BLOCK, LIQUID STRATUM (cancer only: hematologic vs solid)
+# Reviewer 4 asked for threshold-specific operating characteristics for
+# hematologic versus solid malignancies. The denominator is the cancer ED-admit
+# encounter set, grouped on liquid_01 (1 = hematologic, 0 = solid), and the
+# positivity definition is identical to the ca block above (standard thresholds,
+# including the NEWS single-parameter rule via ever_positive). Composite and
+# nohospice outcomes, matching the subgroup rows of the run matrix.
 # ==============================================================================
 
-message("\n== 03a: meta-analysis inputs ==")
+message("\n== 03a: threshold block, liquid stratum ==")
 
-library(glmmTMB)
+for (outcome_key_l in c("composite", "nohospice")) {
 
-fit_one_score = function(df, score, outcome_col = "outcome", cancer_col = "ca_01",
-                         hosp_col = "hospital_id", score_name_col = "score_name",
-                         max_value_col = "max_value") {
+  flag_col_l = OUTCOMES[key == outcome_key_l]$flag_col
 
-  df_sub = df[df[[score_name_col]] == score, , drop = FALSE]
-  if (nrow(df_sub) == 0L) stop("No rows for score = ", score)
+  ae_l = all_encs_base[ca_01 == 1L, .(joined_hosp_id, liquid_01, o_out = get(flag_col_l))]
 
-  has_multi_hosp = fnunique(df_sub[[hosp_col]]) > 1
+  epc_l =
+    tidyr::expand_grid(joined_hosp_id = ae_l$joined_hosp_id, score_name = THRESHOLDS$score_name) |>
+    as_tidytable() |>
+    join(ae_l,          how = "left", multiple = FALSE) |>
+    join(ever_positive, how = "left", multiple = FALSE) |>
+    ftransform(ever_positive = as.integer(!is.na(time_to_positive_h))) |>
+    select(joined_hosp_id, score_name, liquid_01, ever_positive, o_out)
+  epc_l = as.data.table(epc_l)
 
-  f = if (has_multi_hosp) {
-    as.formula(paste0(outcome_col, " ~ ", max_value_col, " * ", cancer_col, " + (1|", hosp_col, ")"))
-  } else {
-    as.formula(paste0(outcome_col, " ~ ", max_value_col, " * ", cancer_col))
-  }
+  ever_agg_l = epc_l[, .(n = .N), by = .(score_name, liquid_01, ever_positive, o_out)][, site := site_lowercase][]
+  write_artifact(ever_agg_l, "threshold", "ever", site_lowercase, strata = "liquid", outcome = outcome_key_l)
 
-  fit = tryCatch(
-    glmmTMB(f, family = binomial(), data = df_sub),
-    warning = function(w) {
-      if (grepl("non-positive-definite", conditionMessage(w))) {
-        glmmTMB(f, family = binomial(), data = df_sub,
-                control = glmmTMBControl(optimizer = optim, optArgs = list(method = "BFGS")))
-      } else {
-        warning(w); glmmTMB(f, family = binomial(), data = df_sub)
-      }
-    }
-  )
+  sesp_l = epc_l[, .(
+    n_total      = .N,
+    n_outcome    = sum(o_out == 1L, na.rm = TRUE),
+    n_no_outcome = sum(o_out == 0L, na.rm = TRUE),
+    n_pos        = sum(ever_positive == 1L, na.rm = TRUE),
+    n_neg        = sum(ever_positive == 0L, na.rm = TRUE),
+    tp           = sum(ever_positive == 1L & o_out == 1L, na.rm = TRUE),
+    fp           = sum(ever_positive == 1L & o_out == 0L, na.rm = TRUE),
+    tn           = sum(ever_positive == 0L & o_out == 0L, na.rm = TRUE),
+    fn           = sum(ever_positive == 0L & o_out == 1L, na.rm = TRUE)
+  ), by = .(score_name, liquid_01)
+  ][, `:=`(
+    sensitivity = tp / (tp + fn),
+    specificity = tn / (tn + fp),
+    ppv         = tp / (tp + fp),
+    npv         = tn / (tn + fn),
+    site        = site_lowercase
+  )][]
+  write_artifact(sesp_l, "threshold", "sesp", site_lowercase, strata = "liquid", outcome = outcome_key_l)
 
-  co = summary(fit)$coefficients$cond
-  int_rows = grep(paste0("^", max_value_col, ":"), rownames(co), value = TRUE)
-  int_rows = int_rows[grepl(paste0("^", max_value_col, ":", cancer_col), int_rows)]
-  if (length(int_rows) != 1L) stop("Could not identify interaction term: ", paste(int_rows, collapse = ", "))
-
-  tidytable(
-    score          = score,
-    beta_int       = co[int_rows, "Estimate"],
-    se_int         = co[int_rows, "Std. Error"],
-    beta_intercept = co["(Intercept)", "Estimate"],
-    se_intercept   = co["(Intercept)", "Std. Error"],
-    beta_score     = co[max_value_col, "Estimate"],
-    se_score       = co[max_value_col, "Std. Error"],
-    beta_cancer    = co[cancer_col, "Estimate"],
-    se_cancer      = co[cancer_col, "Std. Error"],
-    site_n         = nobs(fit),
-    n_events       = fsum(df_sub[[outcome_col]] == 1L, na.rm = TRUE),
-    n_hospitals    = fnunique(df_sub[[hosp_col]]),
-    converged      = isTRUE(fit$fit$convergence == 0),
-    hess_pd        = !any(is.na(co[, "Std. Error"]))
-  )
+  rm(ae_l, epc_l, ever_agg_l, sesp_l)
 }
 
-dt_max_main = materialize_variant_max("main", scores, fc, OUTCOMES[key == "composite"], STRATA[key == "ca"])
-
-df_model =
-  fsubset(dt_max_main, ed_admit_01 == 1) |>
-  fgroup_by(joined_hosp_id, score_name) |>
-  fsummarize(
-    hospital_id = ffirst(hospital_id),
-    ca_01       = fmax(ca_01),
-    max_value   = fmax(max_value),
-    outcome     = fmax(outcome)
-  )
-
-site_fit_tbl = rbindlist(
-  lapply(funique(df_model$score_name), function(sc) {
-    message("  Fitting: ", sc)
-    fit_one_score(df_model, score = sc)
-  }),
-  use.names = TRUE, fill = TRUE
-)[, site := site_lowercase][]
-write_artifact(site_fit_tbl, "meta", "coefficients", site_lowercase)
-
-score_sds =
-  fgroup_by(df_model, score_name) |>
-  fsummarize(
-    sd_score     = fsd(max_value, na.rm = TRUE),
-    mean_score   = fmean(max_value, na.rm = TRUE),
-    n_encounters = fnobs(max_value)
-  ) |>
-  rename(score = score_name) |>
-  ftransform(site = site_lowercase)
-write_artifact(score_sds, "meta", "score_sds", site_lowercase)
 
 # --- bootstrap horizon counts (composite / ca / main) -------------------------
 # Cluster bootstrap over encounters. Encounters are drawn with replacement and

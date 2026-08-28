@@ -1,6 +1,6 @@
 # Early Warning Score Validation in Oncology Inpatients
 
-> A federated analysis pipeline for validating common early warning scores (SIRS, qSOFA, MEWS, MEWS-SF, NEWS2) for clinical deterioration in hospitalized adults with and without cancer, using the CLIF consortium data model.
+> A federated analysis pipeline for validating common early warning scores (SIRS, qSOFA, MEWS, MEWS-SF, NEWS) for clinical deterioration in hospitalized adults with and without cancer, using the CLIF consortium data model.
 
 ## Table of Contents
 
@@ -19,7 +19,6 @@
   - [02c_monitoring.R — Monitoring Intensity](#02c_monitoringr--monitoring-intensity)
   - [03a_artifacts.R — Discrimination, Thresholds, Sensitivity](#03a_artifactsr--discrimination-thresholds-sensitivity)
   - [03b_leadtime.R — Lead Time to Deterioration](#03b_leadtimer--lead-time-to-deterioration)
-  - [03c_models.R — Longitudinal GEE Models](#03c_modelsr--longitudinal-gee-models)
   - [run_all.R — Orchestration and Manifest](#run_allr--orchestration-and-manifest)
 - [Output Artifacts](#output-artifacts)
 - [Privacy and Small-Cell Handling](#privacy-and-small-cell-handling)
@@ -35,13 +34,13 @@
 This repository implements a federated analysis pipeline for a multi-site validation study of early warning scores in hospitalized adults, comparing performance between patients with and without cancer. The pipeline:
 
 1. **Builds a cohort** of adult ward inpatients from CLIF-formatted EHR data
-2. **Derives time-varying scores** (SIRS, qSOFA, MEWS, MEWS-SF, NEWS2) from vitals and labs
+2. **Derives time-varying scores** (SIRS, qSOFA, MEWS, MEWS-SF, NEWS) from vitals and labs
 3. **Defines clinical outcomes** over a competing-risk universe of ICU transfer, in-hospital death, and hospice discharge
 4. **Exports analysis-ready aggregate artifacts** with built-in QC and privacy safeguards
 
 Each participating site runs this pipeline locally on its own data. Only aggregate summary statistics are shared for pooled analysis — no patient-level data ever leaves the site. The design keeps site outputs poolable without disclosure: continuous summaries, for example, are exported as sums and sums-of-squares (`age_sum`, `age_sumsq`) rather than means and standard deviations, so the coordinating center recovers pooled moments exactly without any site releasing a patient.
 
-This is the **round-two (revision)** pipeline. It supersedes the single `03_analysis.R` of round one with a generalized artifact engine (`03a`) and adds four reviewer-driven analyses: a carry-forward sensitivity analysis (`02b`), a monitoring-intensity export (`02c`), a lead-time analysis (`03b`), and a longitudinal GEE model (`03c`). Round-two artifacts are written to `upload_to_box_v2/`; the round-one artifacts remain frozen in `upload_to_box/`.
+This is the **round-two (revision)** pipeline. It supersedes the single `03_analysis.R` of round one with a generalized artifact engine (`03a`) and adds three reviewer-driven analyses: a carry-forward sensitivity analysis (`02b`), a monitoring-intensity export (`02c`), and a lead-time analysis (`03b`). Round-two artifacts are written to `upload_to_box_v2/`; the round-one artifacts remain frozen in `upload_to_box/`.
 
 Round two also replaces on-the-fly package installation with [uvr](https://github.com/nbafrank/uvr), which pins the R version and every package version through a committed lockfile. All eight sites therefore run identical package versions on whatever operating system they have, and nothing the pipeline installs touches the site's system R library. See [Prerequisites](#prerequisites) and [Installation](#installation).
 
@@ -64,9 +63,9 @@ Round two also replaces on-the-fly package installation with [uvr](https://githu
 - **Pinned, portable environment** — uvr installs the R version and the exact locked package set into a project-local library on macOS, Linux, and Windows
 - **Automated validation** — Schema checks, value-domain verification, and case-insensitive column resolution
 - **Flexible input formats** — Supports Parquet, CSV, and FST file formats
-- **Score derivation with explicit imputation rules** — LOCF imputation, FiO₂ inference, ward-restricted calculation, NEWS2 supplemental-oxygen item
+- **Score derivation with explicit imputation rules** — LOCF imputation, FiO₂ inference, ward-restricted calculation, the NEWS supplemental-oxygen item
 - **Five competing-risk outcomes** — Composite and its decompositions, each with per-outcome event and censoring times
-- **Comprehensive analyses** — Discrimination (AUROC), threshold performance, fixed-horizon prediction, lead time, carry-forward and other sensitivity analyses, longitudinal GEE
+- **Comprehensive analyses** — Discrimination (AUROC), threshold performance, fixed-horizon prediction, lead time, carry-forward and other sensitivity analyses
 - **Privacy safeguards** — Estimability floor for AUROC and small-cell suppression for diagnosis-code tallies
 - **Reproducible** — Fixed random seeds, a committed lockfile, a per-run upload manifest with checksums, and standardized output naming
 
@@ -89,12 +88,11 @@ Round two also replaces on-the-fly package installation with [uvr](https://githu
 ├── code/
 │   ├── 00_setup.R                      # Environment verification, config loading, CLIF validation
 │   ├── 01_cohort.R                     # Cohort construction, outcomes, comorbidities, cancer codes
-│   ├── 02_scores.R                     # Time-varying scores (incl. NEWS2), then Table 2 and admission dx
+│   ├── 02_scores.R                     # Time-varying scores, then Table 2 and admission dx
 │   ├── 02b_carryforward.R              # Carry-forward window sensitivity analysis
 │   ├── 02c_monitoring.R                # Monitoring-intensity and missingness exports
 │   ├── 03a_artifacts.R                 # Discrimination, thresholds, horizons, sensitivity variants
 │   ├── 03b_leadtime.R                  # Lead time from first alert to deterioration
-│   ├── 03c_models.R                    # Longitudinal (GEE) score × cancer interaction
 │   └── run_all.R                       # Orchestration, run report, and upload manifest
 │
 ├── .here                               # Project-root sentinel for the here package (see Installation)
@@ -117,8 +115,7 @@ Round two also replaces on-the-fly package installation with [uvr](https://githu
 │   ├── threshold/                      # Threshold metrics, lead time, crossings
 │   ├── horizon/                        # Fixed-horizon prediction counts
 │   ├── sensitivity/                    # Sensitivity-analysis variants
-│   ├── diagnostics/                    # Monitoring, missingness, NEWS2 O₂ resolution
-│   └── meta/                           # Coefficients for meta-analysis
+│   └── diagnostics/                    # Monitoring, missingness, NEWS O₂ resolution
 │
 └── README.md
 ```
@@ -139,10 +136,10 @@ The pipeline requires the following tables in your `clif_data_location` director
 | `clif_hospital_diagnosis` | ICD-10-CM codes for cancer identification and admission diagnoses |
 | `clif_vitals` | Heart rate, respiratory rate, temperature, systolic BP, SpO₂ |
 | `clif_labs` | WBC and pCO₂ (SIRS); broader lab set validated at load |
-| `clif_respiratory_support` | Device category, FiO₂, flow rates (MEWS-SF and NEWS2 O₂ item) |
+| `clif_respiratory_support` | Device category, FiO₂, flow rates (MEWS-SF and the NEWS O₂ item) |
 | `clif_medication_admin_continuous` | Vasopressor administration |
 | `clif_code_status` | Admission code status (for the full-code sensitivity analysis) |
-| `clif_patient_assessments` | GCS total (for qSOFA, MEWS, NEWS2) |
+| `clif_patient_assessments` | GCS total (for qSOFA, MEWS, NEWS) |
 
 Setup validates that each table exists and that key categorical columns contain the expected values (e.g. `location_category` includes `ed`, `icu`, `ward`; `discharge_category` includes `Hospice` and `Expired`). Column matching is case-insensitive, but the columns must be present.
 
@@ -171,7 +168,7 @@ data.table, tidytable, collapse, dplyr, tibble, tidyr, janitor, rlang
 arrow, fst, readxl, yaml, here
 
 # Analysis
-pROC, glmmTMB, geepack, comorbidity
+pROC, comorbidity
 
 # Utilities
 stringr, lubridate, ps
@@ -183,9 +180,9 @@ uvr resolves the full transitive closure of these into `uvr.lock`. Packages inst
 
 `uvr.toml` declares a floor of `>= 4.6.0`. `.r-version` pins the exact version, **4.6.1**, and that pin is what governs. Both files are committed.
 
-The exact pin matters because pre-built package binaries are compiled against a specific R minor series. Two sites on 4.6.x and 4.7.x would not be running the same binaries even from an identical lockfile, which is the `glmmTMB`/`TMB` failure class one layer down. The pin costs a site nothing: uvr installs R 4.6.1 into `~/.uvr/r-versions/` per project, with no administrator rights and no effect on the system R that machine already has.
+The exact pin matters because pre-built package binaries are compiled against a specific R minor series. Two sites on 4.6.x and 4.7.x would not be running the same binaries even from an identical lockfile, which is how compiled dependencies fail at run time one layer down. The pin costs a site nothing: uvr installs R 4.6.1 into `~/.uvr/r-versions/` per project, with no administrator rights and no effect on the system R that machine already has.
 
-> **Why this changed.** Round one called `install.packages()` at the top of `00_setup.R`, which meant each site ran whatever CRAN happened to serve on the day it ran, against whatever R that machine had. Version drift across sites is not always visible in results, and `glmmTMB`/`TMB` in particular can fail at run time when the two were built against mismatched versions. A committed lockfile removes that class of problem.
+> **Why this changed.** Round one called `install.packages()` at the top of `00_setup.R`, which meant each site ran whatever CRAN happened to serve on the day it ran, against whatever R that machine had. Version drift across sites is not always visible in results, and compiled packages in particular can fail at run time when built against mismatched versions. A committed lockfile removes that class of problem.
 >
 > **Windows only.** A package will occasionally fall back to a source install on Windows, which needs [Rtools](https://cran.r-project.org/bin/windows/Rtools/). `uvr doctor` reports whether Rtools is present. If `uvr sync --frozen` completes without error, you do not need it.
 
@@ -289,11 +286,11 @@ allow_sparse_o2: false
 | `file_type` | Format of CLIF input files | `"parquet"`, `"csv"`, `"fst"` |
 | `site_lowercase` | Your site's identifier; trimmed and lowercased, then validated against `clif_sites.csv` | `"emory"`, `"ohsu"` |
 | `time_zone` | Your site's local time zone | `"America/Chicago"` |
-| `allow_sparse_o2` | Downgrades the NEWS2 sparse-oxygen stop to a warning | `false` |
+| `allow_sparse_o2` | Downgrades the NEWS sparse-oxygen stop to a warning | `false` |
 
 > **Note on `project_location`:** This field is retained in the config but is no longer used to resolve paths. All directory creation and every write resolve through `here()` off the repository root, so `proj_tables/` and the upload directory are created there regardless of `project_location`.
 
-> **Note on `allow_sparse_o2`:** `02_scores.R` stops the run when more than 90% of NEWS2 score rows have no supplemental-oxygen measurement within 6 hours, which means `lpm_set` and `fio2_set` exist as columns in `clif_respiratory_support` but are effectively empty. Setting `allow_sparse_o2: true` downgrades that stop to a warning, and the run finishes with NEWS2 scored without its supplemental-oxygen item. **Set it to `true` only after the coordinating center has confirmed that your oxygen data are genuinely absent.** The key is optional — an older config that omits it reads as `false` — but the value must be unquoted `true` or `false`; a quoted `"false"` is rejected rather than coerced.
+> **Note on `allow_sparse_o2`:** `02_scores.R` stops the run when more than 90% of NEWS score rows have no supplemental-oxygen measurement within 6 hours, which means `lpm_set` and `fio2_set` exist as columns in `clif_respiratory_support` but are effectively empty. Setting `allow_sparse_o2: true` downgrades that stop to a warning, and the run finishes with NEWS scored without its supplemental-oxygen item. **Set it to `true` only after the coordinating center has confirmed that your oxygen data are genuinely absent.** The key is optional — an older config that omits it reads as `false` — but the value must be unquoted `true` or `false`; a quoted `"false"` is rejected rather than coerced.
 
 ### A note on git hygiene
 
@@ -345,7 +342,6 @@ source("code/02b_carryforward.R")
 source("code/02c_monitoring.R")
 source("code/03a_artifacts.R")
 source("code/03b_leadtime.R")
-source("code/03c_models.R")
 ```
 
 `uvr run` with no script argument starts R with `.uvr/library/` on the search path, which is what satisfies the guard in `00_setup.R`. Each `0x` stage depends on the intermediates the previous one wrote to `proj_tables/`, so run them in order. `run_all.R` also builds the upload manifest at the end; if you run stages by hand, source the manifest section of `run_all.R` afterward, or run `run_all.R` once end to end, to produce `MANIFEST-<site>.csv`.
@@ -361,7 +357,7 @@ Runtime scales with encounter and vitals/lab volume. For orientation, a site of 
 | 02_scores | Heaviest stage; scales with vitals/labs volume |
 | 02b / 02c | Replays scoring at alternate windows / summarizes monitoring |
 | 03a | Discrimination, thresholds, horizons, sensitivity variants, bootstrap |
-| 03b / 03c | Lead time; GEE (encounter-sampled for tractability) |
+| 03b | Lead time |
 
 ---
 
@@ -373,7 +369,7 @@ Runtime scales with encounter and vitals/lab volume. For orientation, a site of 
 
 **Key Operations:**
 
-1. **Environment verification** — Confirms the session is using the uvr project library, confirms the running R matches `.r-version`, then confirms every namespace the pipeline touches is installed. Installs nothing. A missing package stops the run in the first seconds with the command that repairs it, rather than an hour in when `03a` reaches for `glmmTMB`. A checkout predating the pin has no `.r-version`, which reads as no constraint rather than as a failure.
+1. **Environment verification** — Confirms the session is using the uvr project library, confirms the running R matches `.r-version`, then confirms every namespace the pipeline touches is installed. Installs nothing. A missing package stops the run in the first seconds with the command that repairs it, rather than deep into a stage that reaches for it. A checkout predating the pin has no `.r-version`, which reads as no constraint rather than as a failure.
 2. **Resource detection** — Identifies cores and available RAM; sets conservative thread limits for Arrow, data.table, and collapse
 3. **Configuration loading** — Reads `config_clif_oncrisk.yaml`, trims and lowercases `site_lowercase` and `file_type`, validates the site against `clif_sites.csv`, and validates `allow_sparse_o2` as an unquoted logical
 4. **Artifact destination** — Sets the single `BOX_DIR` constant (`upload_to_box_v2`) that governs every write in the pipeline, and creates the six analysis subdirectories
@@ -469,11 +465,11 @@ Elixhauser comorbidities via the Quan ICD-10 algorithm, summarized by the van Wa
 | **qSOFA** | Respiratory rate, systolic BP, GCS | ≥ 2 |
 | **MEWS** | Heart rate, respiratory rate, systolic BP, temperature, GCS | ≥ 5 |
 | **MEWS-SF** | MEWS components + SpO₂/FiO₂ ratio | ≥ 7 |
-| **NEWS2** | Respiratory rate, SpO₂, supplemental O₂, temperature, systolic BP, heart rate, GCS | ≥ 5 (or any single parameter = 3) |
+| **NEWS** | Respiratory rate, SpO₂, supplemental O₂, temperature, systolic BP, heart rate, GCS | ≥ 5 (or any single parameter = 3) |
 
-> **NEWS2, not NEWS.** Round two upgrades the round-one NEWS to NEWS2 by adding the 2-point supplemental-oxygen item (`news_o2`): 2 points when the patient is on any supplemental oxygen (FiO₂ > 0.21 or flow > 0), 0 on room air. The column is still named `news_total`; it now equals the round-one NEWS total plus the O₂ item. The escalation threshold (≥5) and the single-parameter "red score" rule (any component = 3) are unchanged between NEWS and NEWS2 — the O₂ item scores only 0 or 2 and cannot trigger the single-parameter rule. The O₂ item is carried onto the existing score grid by a 6-hour rolling as-of join, which leaves SIRS, qSOFA, MEWS, and MEWS-SF rows unchanged from round one. A per-site diagnostic (`news_o2_resolution`) records how each O₂ value was resolved, distinguishing values carried forward from a measurement (`carried_forward`) from values set to zero for want of one (`defaulted_zero`).
+> **Completing NEWS.** Published NEWS (Smith 2013) includes a 2-point supplemental-oxygen item that the round-one build omitted; round two completes the score by adding it (`news_o2`): 2 points when the patient is on any supplemental oxygen (FiO₂ > 0.21 or flow > 0), 0 on room air. (This is NOT an upgrade to NEWS2 — NEWS2's distinguishing features, the alternative SpO₂ Scale 2 and the new-confusion level, are not implemented; see the manuscript's eTable 4 deviations.) The column is still named `news_total`; it now equals the round-one total plus the O₂ item. The escalation threshold (≥5) and the single-parameter "red score" rule (any component = 3) are unchanged — the O₂ item scores only 0 or 2 and cannot trigger the single-parameter rule. The O₂ item is carried onto the existing score grid by a 6-hour rolling as-of join, which leaves SIRS, qSOFA, MEWS, and MEWS-SF rows unchanged from round one. A per-site diagnostic (`news_o2_resolution`) records how each O₂ value was resolved, distinguishing values carried forward from a measurement (`carried_forward`) from values set to zero for want of one (`defaulted_zero`).
 
-> **Sparse-oxygen guard.** If more than 90% of NEWS2 rows resolve to `defaulted_zero`, the run stops. That pattern means `lpm_set` and `fio2_set` are present as columns but effectively empty, and NEWS2 would silently degrade to round-one NEWS without anyone noticing. See `allow_sparse_o2` in [Configuration](#configuration).
+> **Sparse-oxygen guard.** If more than 90% of NEWS rows resolve to `defaulted_zero`, the run stops. That pattern means `lpm_set` and `fio2_set` are present as columns but effectively empty, and NEWS would silently degrade to the round-one build (no O₂ item) without anyone noticing. See `allow_sparse_o2` in [Configuration](#configuration).
 
 #### Imputation Rules
 
@@ -521,7 +517,7 @@ Room air:         FiO₂ = 0.21
 | `<BOX_DIR>/figure_s01_flow_<site>.csv` | Reconciliation row appended to the flow diagram |
 | `<BOX_DIR>/admission_dx_chapter-ca-<site>.csv` | Admission diagnosis by chapter (n > 5) |
 | `<BOX_DIR>/admission_dx_stem-ca-<site>.csv` | Admission diagnosis by 3-char stem (n > 5) |
-| `<BOX_DIR>/diagnostics/news_o2_resolution-<site>.csv` | NEWS2 O₂-item resolution counts by cancer status |
+| `<BOX_DIR>/diagnostics/news_o2_resolution-<site>.csv` | NEWS O₂-item resolution counts by cancer status |
 
 ---
 
@@ -546,9 +542,9 @@ Room air:         FiO₂ = 0.21
 1. **Discrimination (AUROC)** — Encounter-level maximum score vs. outcome, by cancer status and finer strata, with an estimability floor (see [Privacy](#privacy-and-small-cell-handling)).
 1a. **First-ward score distribution** (`firstscore`) — each score's value at the first ward observation, as a count distribution by cancer status. Descriptive (no discrimination); poolable to medians/IQRs/means. Answers Reviewer 1's presenting-acuity comment.
 2. **Threshold performance** — Sensitivity, specificity, PPV/NPV at standard thresholds (`sesp`); ever-positive (`ever`); time to first positivity (`first`); cumulative incidence of positivity (`cuminc`); and score co-positivity patterns (`upset`).
-3. **Fixed-horizon prediction** — Score value at each observation linked to deterioration within the following 12 and 24 hours (`counts … h12`, `counts … h24`), with a cluster bootstrap at 24 hours.
+3. **Fixed-horizon prediction** — Score value at each observation linked to deterioration within the following 12 and 24 hours (`counts … h12`, `counts … h24`), with a cluster bootstrap at both horizons.
 4. **Sensitivity analyses** — see table below.
-5. **Meta-analysis inputs** — Per-score logistic-regression coefficients and the score × cancer interaction (glmmTMB), plus score standard deviations, in `meta/`.
+5. **Liquid-stratum threshold block** — Standard-threshold operating characteristics (`sesp`, `ever`) for hematologic vs. solid malignancies within the cancer cohort, for the composite and nohospice outcomes.
 
 > **The bootstrap resamples encounters, not observations.** 400 replicates draw `joined_hosp_id` values with replacement and carry every observation of a drawn encounter, weighted by its draw multiplicity, so the resampling unit matches the clustering unit and the bootstrap distribution belongs to the same point-level quantity the estimate does. Seed 2025.
 
@@ -561,26 +557,13 @@ Room air:         FiO₂ = 0.21
 | `se_one_enc_per_pt` | One randomly selected encounter per patient (seed 2025) |
 | `cf2` / `cf6` / `cf12` (from 02b) | Carry-forward replays |
 
-**Strata** span cancer status (`ca`), hematologic vs. solid (`liquid`, within cancer), metastatic (`mets`, within solid-tumor cancer), and cancer diagnosis group (`dxgroup`, within cancer). **Outcomes** span the five keys defined in `01_cohort.R`.
+**Strata** span cancer status (`ca`), hematologic vs. solid (`liquid`, within cancer), and metastatic (`mets`, within solid-tumor cancer). **Outcomes** span the five keys defined in `01_cohort.R`.
 
 ---
 
 ### 03b_leadtime.R — Lead Time to Deterioration
 
-**Purpose:** Report how much warning an alert affords. For each encounter, score, and outcome, computes the hours from the first threshold-positive score to the event, exported as binned counts plus sufficient statistics (never individual intervals), together with a crossed × event classification of every encounter (`crossclass`). Positivity uses the standard thresholds with the NEWS2 single-parameter rule. Because the score series is truncated before the event, every crossing precedes it and lead times are strictly positive (asserted). A QC cross-check ties the crossed-and-event counts back to `03a`'s `sesp` artifact. Outcomes: composite and nohospice. Outputs in `threshold/`.
-
----
-
-### 03c_models.R — Longitudinal GEE Models
-
-**Purpose:** Provide the reviewer-requested longitudinal method that accounts for repeated within-encounter measurements. For each score, fits a GEE with an exchangeable working correlation clustered on the encounter and exports the score × cancer interaction with robust standard errors, for central meta-analysis.
-
-- **Model:** `outcome_24h ~ value * ca_01 (+ hospital_id where >1 hospital)`, `family = binomial`, `id = joined_hosp_id`, `corstr = "exchangeable"`
-- **Outcome:** composite at the 24-hour horizon
-- **Sampling:** encounters (not observations) are sampled to a cap of 100,000 with seed 2025, keeping all observations of the chosen encounters
-- **QC:** convergence is reported (not fatal); the interaction sign is cross-checked against `03a`'s glmmTMB coefficients
-
-Output: `meta/gee_coefficients-<site>.csv`.
+**Purpose:** Report how much warning an alert affords. For each encounter, score, and outcome, computes the hours from the first threshold-positive score to the event, exported as binned counts plus sufficient statistics (never individual intervals), together with a crossed × event classification of every encounter (`crossclass`). Positivity uses the standard thresholds with the NEWS single-parameter rule. Because the score series is truncated before the event, every crossing precedes it and lead times are strictly positive (asserted). A QC cross-check ties the crossed-and-event counts back to `03a`'s `sesp` artifact. Outcomes: composite and nohospice. Outputs in `threshold/`.
 
 ---
 
@@ -605,7 +588,7 @@ All outputs follow a standardized naming convention:
 upload_to_box_v2/<family>/<artifact>[-<strata>][-<outcome>][-h<hours>][-<variant>]-<site>.csv
 ```
 
-Tokens are optional and appear only where they apply: `strata` (e.g. `ca`, `liquid`, `mets`, `dxgroup`), `outcome` (`composite`, `nohospice`, `wardicu`, `warddeath`, `hospicedc`), `hours` (`h12`, `h24`), and `variant` (e.g. `se_fullcode_only`, `cf6`, `boot`).
+Tokens are optional and appear only where they apply: `strata` (e.g. `ca`, `liquid`, `mets`), `outcome` (`composite`, `nohospice`, `wardicu`, `warddeath`, `hospicedc`), `hours` (`h12`, `h24`), and `variant` (e.g. `se_fullcode_only`, `cf6`, `boot`).
 
 ### Directory Structure
 
@@ -627,7 +610,7 @@ upload_to_box_v2/
 │   └── crossclass-ca-<outcome>-<site>.csv          # Crossed × event classification
 │
 ├── horizon/
-│   └── counts-<strata>-<outcome>-h{12,24}-<site>.csv  # Horizon prediction counts (+ bootstrap at h24)
+│   └── counts-<strata>-<outcome>-h{12,24}-<site>.csv  # Horizon prediction counts (+ bootstrap, both horizons)
 │
 ├── sensitivity/
 │   ├── maxscores-<strata>-<outcome>-<variant>-<site>.csv
@@ -635,21 +618,17 @@ upload_to_box_v2/
 │   └── ...                                          # se_* and cf2/cf6/cf12 variants
 │
 ├── diagnostics/
-│   ├── news_o2_resolution-<site>.csv               # NEWS2 O₂-item resolution
+│   ├── news_o2_resolution-<site>.csv               # NEWS O₂-item resolution
 │   ├── monitoring-ca-<site>.csv                    # Measurements per 24 ward-hours
 │   ├── monitoring_bins-ca-<site>.csv               # Binned monitoring rates
 │   └── missing_vlab-ca-<site>.csv                  # Vital/lab missingness by cancer status
-│
-├── meta/
-│   ├── coefficients-<site>.csv                     # glmmTMB regression coefficients
-│   ├── score_sds-<site>.csv                        # Score standard deviations
-│   └── gee_coefficients-<site>.csv                 # GEE score × cancer interaction
 │
 ├── table_02_cont_<site>.csv                        # Continuous variable summaries
 ├── table_02_cat_<site>.csv                         # Categorical variable summaries
 ├── figure_s01_flow_<site>.csv                      # Flow-diagram data
 ├── missing_demog_<site>.csv                        # Demographic missingness
 ├── cancer_codes_primary_<site>.csv                 # Cancer-code frequencies
+├── hospital_types_<site>.csv                       # Hospital counts by type (eTable 1)
 ├── admission_dx_chapter-ca-<site>.csv              # Admission diagnosis by chapter
 ├── admission_dx_stem-ca-<site>.csv                 # Admission diagnosis by stem
 ├── env_manifest_<site>.csv                         # R version, platform, and package versions
@@ -700,7 +679,7 @@ The AUROC floor is an **estimability** rule, not a disclosure rule: an AUROC com
 | Package compile failure (Windows) | Source fallback without a toolchain | Install [Rtools](https://cran.r-project.org/bin/windows/Rtools/); confirm with `uvr doctor` |
 | "Column not found" | Schema mismatch | Check column names in CLIF tables; the resolver is case-insensitive but names must exist |
 | Arrow read errors | Corrupt or unreadable input files | Verify the files open outside R, or use `file_type: "csv"` |
-| NEWS2 sparse-oxygen stop | `lpm_set` and `fio2_set` present but effectively empty | Confirm with the coordinating center, then set `allow_sparse_o2: true` |
+| NEWS sparse-oxygen stop | `lpm_set` and `fio2_set` present but effectively empty | Confirm with the coordinating center, then set `allow_sparse_o2: true` |
 | "Sanity check failed" | Outcome rates out of expected range | Review `cohort.parquet` for local coding issues |
 | `here()` cannot find root | Launched outside the repository root, or `.here` missing | Launch from the repository root; confirm `.here` is present |
 | "BOX_DIR not found" | A stage was run before `00_setup.R` | Run stages in order, or use `run_all.R` |

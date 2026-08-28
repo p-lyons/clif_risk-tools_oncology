@@ -161,6 +161,6 @@ for (ok in LEADTIME_OUTCOMES) {
 message("\n== 03b complete ==")
 message("Files written to: ", thr_dir)
 
-# go to 03c
+# end of site pipeline; run_all.R builds the manifest next
 
 ################################################################################

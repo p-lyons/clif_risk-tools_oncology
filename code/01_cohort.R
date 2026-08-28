@@ -123,10 +123,9 @@ run_log$n_hid_multi_patient = length(hid_multi_patient)
 if (length(hid_multi_patient) > 0) {
   n_multi_rows = nrow(fsubset(hosp_patient_map, hospitalization_id %in% hid_multi_patient))
   message(
-    sprintf("⚠️  Excluding %s hospitalization_id(s) carrying more than one patient_id (%s chart rows). First few: %s",
+    sprintf("⚠️  Excluding %s hospitalization_id(s) carrying more than one patient_id (%s chart rows). IDs withheld from the log; inspect hid_multi_patient interactively.",
             format(length(hid_multi_patient), big.mark = ","),
-            format(n_multi_rows,              big.mark = ","),
-            paste(head(hid_multi_patient, 10), collapse = ", "))
+            format(n_multi_rows,              big.mark = ","))
   )
   rm(n_multi_rows)
 } else {
@@ -336,8 +335,8 @@ if (nrow(dup_deaths) > 0) {
   n_pats  = length(unique(dup_deaths$patient_id))
 
   message(
-    sprintf("Removed %d duplicate deaths for %d patients: %s",
-            n_dupes, n_pats, paste(unique(dup_deaths$patient_id), collapse = ", "))
+    sprintf("Removed %d duplicate deaths for %d patients. IDs withheld from the log; inspect dup_deaths interactively.",
+            n_dupes, n_pats)
   )
 }
 
@@ -357,10 +356,9 @@ if (nrow(post_death_admissions) > 0) {
   cohort = fsubset(cohort, !joined_hosp_id %in% post_death_admissions$joined_hosp_id)
 
   message(
-    sprintf("Removed %d post-death encs for %d patients (? organ donors): %s",
+    sprintf("Removed %d post-death encs for %d patients (? organ donors). IDs withheld from the log; inspect post_death_admissions interactively.",
             nrow(post_death_admissions),
-            length(unique(post_death_admissions$patient_id)),
-            paste(unique(post_death_admissions$patient_id), collapse = ", "))
+            length(unique(post_death_admissions$patient_id)))
   )
 }
 
@@ -480,6 +478,28 @@ fwrite(
   cancer_code_tally_primary,
   here(BOX_DIR, paste0("cancer_codes_primary_", site_lowercase, ".csv"))
 )
+
+### tally hospitals by type (eTable 1) ----------------------------------------
+# Reviewer 2 asked for the composition of contributing hospitals. One row per
+# hospital_type (academic / community / LTACH, from the ADT table), counting
+# distinct hospital_id values among the hospitalizations still in the cohort at
+# this point. Counts only; no hospital identifiers leave the site.
+
+hospital_types =
+  dplyr::filter(data_list$adt, hospitalization_id %in% cohort_hids) |>
+  dplyr::select(hospital_id, hospital_type) |>
+  dplyr::distinct() |>
+  dplyr::collect() |>
+  fgroup_by(hospital_type) |>
+  fsummarize(n_hospitals = fnunique(hospital_id)) |>
+  ftransform(site = site_lowercase)
+
+fwrite(
+  hospital_types,
+  here(BOX_DIR, paste0("hospital_types_", site_lowercase, ".csv"))
+)
+
+rm(hospital_types)
 
 ### tally for inclusion flow diagram -------------------------------------------
 

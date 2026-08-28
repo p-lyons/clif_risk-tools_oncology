@@ -1,7 +1,7 @@
 # run_all.R — orchestrate the round-two site pipeline.
 # Order: 00 setup, 01 cohort, 02 scores, 02b carry-forward, 02c monitoring,
-#        03a artifacts, 03b lead time, 03c GEE models. Then a manifest of every
-#        uploaded file for the coordinating center to reconcile.
+#        03a artifacts, 03b lead time. Then a manifest of every uploaded file
+#        for the coordinating center to reconcile.
 #
 # Orchestration note. Each stage is sourced into the global environment (so a
 # stage can see the objects the previous stage left behind — cohort, scores,
@@ -35,8 +35,7 @@ stages = list(
   c("02b", here::here("code", "02b_carryforward.R")),
   c("02c", here::here("code", "02c_monitoring.R")),
   c("03a", here::here("code", "03a_artifacts.R")),
-  c("03b", here::here("code", "03b_leadtime.R")),
-  c("03c", here::here("code", "03c_models.R"))
+  c("03b", here::here("code", "03b_leadtime.R"))
 )
 
 message("Starting round-two pipeline...")
@@ -129,9 +128,10 @@ EXPECTED_PATTERNS = c(
   "^main/maxscores-mets-composite-",
   "^main/auroc-ca-composite-",
   "^main/firstscore-ca-",
-  "^main/events-dxgroup-composite-",
+  "^main/events-liquid-composite-",
   "^threshold/ever-ca-composite-",
   "^threshold/sesp-ca-composite-",
+  "^threshold/sesp-liquid-composite-",
   "^threshold/cuminc-ca-composite-",
   "^threshold/first-ca-composite-",
   "^threshold/upset-ca-composite-",
@@ -145,9 +145,7 @@ EXPECTED_PATTERNS = c(
   "^diagnostics/monitoring-ca-",
   "^diagnostics/monitoring_bins-ca-",
   "^diagnostics/missing_vlab-ca-",
-  "^meta/coefficients-",
-  "^meta/score_sds-",
-  "^meta/gee_coefficients-"
+  "^hospital_types_"
 )
 
 manifest = build_manifest(here(BOX_DIR), site_lowercase, PIPELINE_VERSION, as.character(Sys.Date()))

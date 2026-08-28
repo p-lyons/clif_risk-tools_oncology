@@ -249,9 +249,10 @@ resp$fio2 = case_when(
   TRUE                                         ~ resp$fio2_impute
 )
 
-### news2 supplemental-oxygen item: full-coverage stream -----------------------
-# NEWS2 adds a 2-point supplemental-oxygen item that the round-one NEWS build
-# omitted. It needs coverage of every encounter, so it is derived here from the
+### news supplemental-oxygen item: full-coverage stream ------------------------
+# Published NEWS (Smith 2013) includes a 2-point supplemental-oxygen item that
+# the round-one build omitted; round two completes the score. The item needs
+# coverage of every encounter, so it is derived here from the
 # full respiratory_support extract -- before the keep_ids filter below that
 # restricts the SpO2/FiO2 (MEWS-SF) stream to encounters with an SpO2 value --
 # reusing the fio2 computed just above verbatim.
@@ -398,7 +399,7 @@ for (col in score_component_cols) {
 #                              stage on this at 2/6/12h; the cf6 pass must
 #                              reproduce this script's main output exactly.
 #   news_o2_stream.parquet     The supplemental-oxygen measurement stream BEFORE
-#                              the 6h carry, so P3 can reproduce the NEWS2 O2
+#                              the 6h carry, so P3 can reproduce the NEWS O2
 #                              item at each vitals window.
 #   vital_lab_extract.parquet  One row per (encounter, measure, measurement time)
 #                              for the six vitals and WBC, spanning the whole
@@ -482,7 +483,7 @@ locf <- function(df, col, hours, id = "joined_hosp_id", tcol = "time") {
 for (cn in vital_cols) scores = locf(scores, cn, hours = 6)
 for (cn in lab_cols)   scores = locf(scores, cn, hours = 12)
 
-## news2 O2 item: 6h as-of carry onto the fixed score grid ---------------------
+## news O2 item: 6h as-of carry onto the fixed score grid ----------------------
 # Grid-fixed decision (confirmed with Brenna): news_o2 is deliberately NOT in
 # vital_cols above, so the score grid built by the Reduce/full-join is identical
 # to round one. Here the O2 stream is carried onto each existing score row by a
@@ -545,7 +546,7 @@ scores[, news_any3 := as.integer(
     news_sbp == 3L | news_spo2 == 3L | news_gcs == 3L
 )]
 
-## QC: NEWS2 build -------------------------------------------------------------
+## QC: NEWS supplemental-oxygen build ------------------------------------------
 # news_o2 is 0/2 only; the new news_total is exactly the round-one NEWS total
 # plus the O2 item, so it can only be >= the round-one value; news_any3 stays
 # 0/1 and does not reference the O2 item. (The definitive byte-identical check
@@ -568,7 +569,7 @@ if (!all(scores$news_any3 %in% c(0L, 1L))) {
   stop("news_any3 is not 0/1.", call. = FALSE)
 }
 
-message("✅ NEWS2 build QC passed (O2 item additive; news_any3 unchanged).")
+message("✅ NEWS O2-item QC passed (O2 item additive; news_any3 unchanged).")
 
 rm(news_total_orig)
 
@@ -671,7 +672,7 @@ ed =
 
 scores$ed_admit_01 = if_else(scores$joined_hosp_id %in% ed, 1L, 0L)
 
-# news2 O2 resolution diagnostic -----------------------------------------------
+# news O2 resolution diagnostic ------------------------------------------------
 # Counts of score-observation rows by how the O2 item was resolved, by cancer
 # status. Under the grid-fixed carry (see above), a concurrent resolution
 # (fio2_gt_21 / lpm_gt_0 / room_air) requires an O2 measurement whose timestamp
@@ -712,7 +713,7 @@ fwrite(
 )
 
 message(
-  sprintf("✅ NEWS2 O2 resolution diagnostic written | %d branch × cancer cells.",
+  sprintf("✅ NEWS O2 resolution diagnostic written | %d branch × cancer cells.",
           nrow(news_o2_resolution))
 )
 
@@ -731,7 +732,7 @@ o2_observed_keys = paste0(news_o2_resolution$ca_01, "|", news_o2_resolution$reso
 o2_missing_keys  = setdiff(o2_expected_keys, o2_observed_keys)
 
 if (length(o2_missing_keys) == 0L) {
-  message("✅ NEWS2 O2 diagnostic complete | 10 of 10 branch × cancer cells populated.")
+  message("✅ NEWS O2 diagnostic complete | 10 of 10 branch × cancer cells populated.")
 } else {
   message(sprintf(
     "  note: %d of 10 branch × cancer cells are empty at this site (ca_01|branch): %s",
@@ -742,7 +743,7 @@ if (length(o2_missing_keys) == 0L) {
 # sparse-oxygen guard ----------------------------------------------------------
 # 00_setup.R fails a site whose respiratory_support lacks lpm_set or fio2_set. A
 # site where those columns exist but are entirely null passes that check, sends
-# every score row to the defaulted_zero branch, and runs NEWS2 without its
+# every score row to the defaulted_zero branch, and runs NEWS without its
 # supplemental-oxygen item without any downstream complaint. The defaulted
 # fraction is therefore printed on every run, warned on above 0.50, and treated
 # as fatal above 0.90. Reference site: 17.6% of non-cancer rows and 11.9% of
@@ -761,7 +762,7 @@ frac_defaulted_ca  = if (n_rows_ca  > 0L) n_defaulted_ca  / n_rows_ca  else NA_r
 frac_defaulted_no  = if (n_rows_no  > 0L) n_defaulted_no  / n_rows_no  else NA_real_
 
 message(sprintf(
-  "  NEWS2 O2 defaulted to room air | overall %.1f%% | non-cancer %.1f%% | cancer %.1f%%",
+  "  NEWS O2 defaulted to room air | overall %.1f%% | non-cancer %.1f%% | cancer %.1f%%",
   100 * frac_defaulted_all, 100 * frac_defaulted_no, 100 * frac_defaulted_ca
 ))
 
@@ -770,7 +771,7 @@ o2_sparse_msg = paste(
   "================================================================================",
   sprintf("  SPARSE SUPPLEMENTAL-OXYGEN DATA: %.1f%% of score rows have no oxygen",
           100 * frac_defaulted_all),
-  "  measurement within 6 hours and were scored as room air. NEWS2 is largely",
+  "  measurement within 6 hours and were scored as room air. NEWS is largely",
   "  running without its supplemental-oxygen item at this site.",
   "",
   "  Check lpm_set, fio2_set, and device_category in respiratory_support. The",
