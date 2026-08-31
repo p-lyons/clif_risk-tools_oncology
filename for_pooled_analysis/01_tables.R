@@ -1,6 +1,16 @@
-
 # 01_tables.R
-# Table 1 (flow), Table 2 (characteristics), Table 3 (outcomes)
+# Table 2 (characteristics) and Table 3 (outcomes), pooled across sites.
+#
+# Round-two changes:
+#   - The flow-diagram section is removed. Exclusion-flow QC lives in qc.R and
+#     eFigure 1 is produced by figure_s01.R at the repo root (six rows, revised
+#     labels). This script still pools the flow counts and exports them as a
+#     CSV plus flow_data_final for figure_s01.R and manuscript text.
+#   - Table 3 uses the outcome-keyed table_02_cat flags: composite / wardicu /
+#     warddeath / hospicedc replace the round-one wicu / d_noicu / h_noicu, and
+#     the composite row comes from table_02_cat directly rather than being
+#     rebuilt from maxscores (02_scores.R now exports both from the same
+#     reconciled denominator, which qc.R verifies).
 
 # setup ------------------------------------------------------------------------
 
@@ -11,48 +21,9 @@ library(officer)
 if (!dir.exists(here("output", "tables")))  dir.create(here("output", "tables"),  recursive = TRUE)
 if (!dir.exists(here("output", "figures"))) dir.create(here("output", "figures"), recursive = TRUE)
 
-# TABLE 1: FLOW DIAGRAM (Figure S1) --------------------------------------------
+# POOLED FLOW COUNTS (for figure_s01.R and manuscript text) ---------------------
 
-message("\n== Creating flow diagram ==")
-
-## QC: check exclusion percentages by site -------------------------------------
-
-flow_qc = copy(flow_data_raw)
-setorder(flow_qc, site, step)
-
-flow_qc[, `:=`(
-  pct_excluded_ca = (n_excluded_ca / shift(n_remaining_ca, type = "lag")) * 100,
-  pct_excluded_no = (n_excluded_no / shift(n_remaining_no, type = "lag")) * 100
-), by = site]
-
-flow_qc = flow_qc[!is.na(n_excluded_ca)]
-
-exclusion_summary = flow_qc[, .(
-  mean_pct_ca = mean(pct_excluded_ca, na.rm = TRUE),
-  sd_pct_ca   = sd(pct_excluded_ca,   na.rm = TRUE),
-  mean_pct_no = mean(pct_excluded_no, na.rm = TRUE),
-  sd_pct_no   = sd(pct_excluded_no,   na.rm = TRUE)
-), by = step]
-
-flow_qc = merge(flow_qc, exclusion_summary, by = "step")
-
-flow_qc[, `:=`(
-  flag_ca = abs(pct_excluded_ca - mean_pct_ca) > 2 * sd_pct_ca,
-  flag_no = abs(pct_excluded_no - mean_pct_no) > 2 * sd_pct_no
-)]
-
-outliers = flow_qc[flag_ca == TRUE | flag_no == TRUE]
-
-if (nrow(outliers) > 0) {
-  message("  WARNING: Outlier exclusion percentages detected:")
-  print(outliers[, .(site, step, 
-                     pct_excluded_ca = round(pct_excluded_ca, 1),
-                     pct_excluded_no = round(pct_excluded_no, 1))])
-} else {
-  message("  No outlier exclusion percentages detected")
-}
-
-## aggregate flow data ---------------------------------------------------------
+message("\n== Pooling flow counts ==")
 
 flow_data = flow_data_raw |>
   fgroup_by(step) |>
@@ -70,51 +41,21 @@ step_order = c(
   "After excluding patients not admitted through the ED",
   "After excluding patients who were in the ICU before admission to the wards",
   "After excluding encounters with < 6h data",
-  "After excluding encounters with outcomes before prediction data available"
+  "After excluding encounters with outcomes before prediction data available",
+  "After excluding encounters with no calculable score before the outcome"
 )
 
 flow_data = flow_data[match(step_order, flow_data$step), ]
 
-## create flow diagram (DiagrammeR) --------------------------------------------
-
-library(DiagrammeR)
-library(DiagrammeRsvg)
-
-ca_start = flow_data[step == step_order[1]]$n_remaining_ca
-no_start = flow_data[step == step_order[1]]$n_remaining_no
-
-diagram_code = paste0(
-  "digraph flowchart {
-    node [shape = box, fontname = Helvetica]
-    A [label = 'Adult inpatient admissions during study period\\nPatients with Cancer: ", format_n(ca_start),
-  "\\nPatients Without Cancer: ", format_n(no_start), "']"
-)
-
-for (i in 2:nrow(flow_data)) {
-  current_node = LETTERS[i]
-  prev_node    = LETTERS[i-1]
-  excl_node    = paste0("E", i-1)
-  excl_label   = gsub("After excluding ", "", flow_data$step[i])
-  
-  diagram_code = paste0(
-    diagram_code, "  ", excl_node,
-    " [label = 'Excluded ", excl_label,
-    "\\nPatients With Cancer: ",    format_n(flow_data$n_excluded_ca[i]),
-    "\\nPatients Without Cancer: ", format_n(flow_data$n_excluded_no[i]), "']\n",
-    "  ", current_node,
-    " [label = 'Remaining Encounters\\nPatients With Cancer: ", format_n(flow_data$n_remaining_ca[i]),
-    "\\nPatients Without Cancer: ", format_n(flow_data$n_remaining_no[i]), "']\n",
-    "  ", prev_node, " -> ", excl_node,    "\n",
-    "  ", prev_node, " -> ", current_node, "\n"
-  )
+if (anyNA(flow_data$n_remaining_ca)) {
+  stop("Pooled flow steps do not match the expected six-row sequence; ",
+       "check site flow labels.", call. = FALSE)
 }
 
-diagram_code = paste0(diagram_code, "}")
+fwrite(flow_data, here("output", "tables", paste0("flow_pooled_", today, ".csv")))
 
-flow_diagram = grViz(diagram_code)
-
-# Save flow diagram
-export_svg(flow_diagram) |> charToRaw() |> rsvg::rsvg_pdf(here("output", "figures", paste0("figure_s01_flow_", today, ".pdf")))
+message("  Pooled flow: ", format_n(flow_data$n_remaining_ca[6]), " cancer / ",
+        format_n(flow_data$n_remaining_no[6]), " non-cancer encounters in the final cohort")
 
 # TABLE 2: CHARACTERISTICS -----------------------------------------------------
 
@@ -147,9 +88,6 @@ cat_data[var == "ethnicity_category", category := fcase(
   category == "unknown",      "Unknown",
   default = category
 )]
-
-# Site - uppercase
-cat_data[var == "site", category := toupper(category)]
 
 ## continuous variables --------------------------------------------------------
 
@@ -199,15 +137,15 @@ cont_wide = rbindlist(list(age_wide, vw_wide))
 
 ### collapse categories --------------------------------------------------------
 
-cat_data[var == "initial_code_status" & category %in% c("presume full", "presumed full", "presume_full"), 
+cat_data[var == "initial_code_status" & category %in% c("presume full", "presumed full", "presume_full"),
          category := "Full"]
-cat_data[var == "initial_code_status" & category %in% c("dnar/dni", "dnr/dni", "and"), 
+cat_data[var == "initial_code_status" & category %in% c("dnar/dni", "dnr/dni", "and"),
          category := "DNR/DNI"]
-cat_data[var == "initial_code_status" & category %in% c("other", "special/partial", "dnar"), 
+cat_data[var == "initial_code_status" & category %in% c("other", "special/partial", "dnar"),
          category := "Other"]
 cat_data[var == "initial_code_status" & tolower(category) == "full",
          category := "Full"]
-cat_data[var == "race_category" & category %in% c("other", "unknown", "two or more races"), 
+cat_data[var == "race_category" & category %in% c("other", "unknown", "two or more races"),
          category := "Other/Unknown"]
 
 ### aggregate ------------------------------------------------------------------
@@ -222,7 +160,7 @@ table_cat[, pct := (n / N) * 100]
 site_counts = cat_data[var == "female", .(n = sum(n)), by = .(ca_01, site)]
 site_counts = merge(site_counts, overall_n, by = "ca_01")
 site_counts[, pct := (n / N) * 100]
-site_counts[, `:=`(var = "site", category = site)]
+site_counts[, `:=`(var = "site", category = toupper(site))]
 site_counts[, site := NULL]
 table_cat = rbindlist(list(table_cat, site_counts), use.names = TRUE)
 
@@ -252,23 +190,27 @@ cat_wide = merge(
 )
 
 ## variable labels -------------------------------------------------------------
+# Round-two outcome flags replace wicu / d_noicu / h_noicu.
 
 var_labels = data.table(
   var = c(
     "N", "age", "vw", "initial_code_status",
     "female", "race_category", "ethnicity_category",
     "site",
-    "los", "wicu", "va", "imv",
-    "dead", "hospice", "d_noicu", "h_noicu"
+    "los", "wardicu", "va", "imv",
+    "dead", "hospice", "warddeath", "hospicedc",
+    "composite", "nohospice", "icu"
   ),
   label = c(
     "N", "Age, years, mean (SD)", "Van Walraven score, mean (SD)", "Admission code status, n (%)",
     "Female sex, n (%)", "Race, n (%)", "Ethnicity, n (%)",
     "Site, n (%)",
-    "Length of stay, n (%)", "Ward-ICU transfer, n (%)",
+    "Length of stay, n (%)", "Ward-to-ICU transfer, n (%)",
     "Vasoactive medications, n (%)", "Invasive mechanical ventilation, n (%)",
     "Died in hospital, n (%)", "Discharged to hospice, n (%)",
-    "Ward death, n (%)", "Ward hospice discharge, n (%)"
+    "Ward death, n (%)", "Ward hospice discharge, n (%)",
+    "Primary composite outcome, n (%)", "Composite excluding hospice discharge, n (%)",
+    "ICU admission, n (%)"
   )
 )
 
@@ -340,46 +282,20 @@ ft2 = flextable(table2) |> autofit()
 save_as_docx(ft2, path = here("output", "tables", paste0("table2_characteristics_", today, ".docx")))
 
 # TABLE 3: OUTCOMES ------------------------------------------------------------
+# Composite and its three components come straight from the outcome-keyed
+# table_02_cat flags; the composite decomposition identity (composite =
+# wardicu + warddeath + hospicedc) is verified by qc.R.
 
 message("\n== Creating Table 3: Outcomes ==")
 
-## primary composite from maxscores (ward death | ward hospice | ICU transfer) -
-
-# use a single score to avoid double-counting encounters
-composite_score = maxscores_ca_raw[analysis == "main" & score_name == "sirs"]
-
-composite_counts = composite_score[, .(
-  n_events = sum(n[outcome == 1]),
-  N        = sum(n)
-), by = ca_01]
-
-# sanity check: maxscores N should match table_cat N
-# stopifnot(all.equal(
-#   composite_counts[order(ca_01)]$N,
-#   overall_n[order(ca_01)]$N
-# ))
-
-composite_counts = merge(composite_counts[, .(ca_01, n_events)], overall_n, by = "ca_01")
-
-composite_counts[, pct  := (n_events / N) * 100]
-composite_counts[, prop := n_events / N]
-composite_counts[, formatted := paste0(format_n(n_events), " (", round(pct, 1), "%)")]
-
-composite_smd_vals = composite_counts[, .(p0 = prop[ca_01 == 0], p1 = prop[ca_01 == 1])]
-composite_smd_vals[, smd := abs(p1 - p0) / sqrt((p0 * (1 - p0) + p1 * (1 - p1)) / 2)]
-
-composite_row = dcast(composite_counts, . ~ ca_01, value.var = "formatted")
-composite_row[, `:=`(var = "composite", category = "1", SMD = round(composite_smd_vals$smd, 3))]
-composite_row[, . := NULL]
-setcolorder(composite_row, c("var", "category", "0", "1", "SMD"))
-setnames(composite_row, c("0", "1"), c("No Cancer", "Cancer"))
-
-cat_wide = rbindlist(list(cat_wide, composite_row), use.names = TRUE)
+outcome_vars    = c("composite", "warddeath", "hospicedc", "wardicu",
+                    "dead", "hospice", "va", "imv", "los")
+binary_outcomes = c("composite", "warddeath", "hospicedc", "wardicu",
+                    "dead", "hospice", "va", "imv")
 
 ## chi-square tests ------------------------------------------------------------
 
-outcome_vars     = c("composite", "d_noicu", "h_noicu", "wicu", "dead", "hospice", "va", "imv", "los")
-outcome_cat_data = table_cat[var %in% c("d_noicu", "h_noicu", "wicu", "dead", "hospice", "va", "imv", "los")]
+outcome_cat_data = table_cat[var %in% outcome_vars]
 
 chi_results = outcome_cat_data[, {
   tab        = dcast(.SD, category ~ ca_01, value.var = "n")
@@ -388,15 +304,7 @@ chi_results = outcome_cat_data[, {
   .(p_value  = test$p.value)
 }, by = var]
 
-# composite chi-square
-comp_tab    = composite_counts[, .(ca_01, n = n_events, N)]
-comp_matrix = matrix(c(comp_tab$n, comp_tab$N - comp_tab$n), nrow = 2)
-comp_pval   = suppressWarnings(chisq.test(comp_matrix))$p.value
-chi_results = rbindlist(list(data.table(var = "composite", p_value = comp_pval), chi_results))
-
 ## risk differences ------------------------------------------------------------
-
-binary_outcomes = c("d_noicu", "h_noicu", "wicu", "dead", "hospice", "va", "imv")
 
 rd_results = table_cat[var %in% binary_outcomes & category == "1", {
   prop_0 = n[ca_01 == 0] / N[ca_01 == 0]
@@ -404,16 +312,6 @@ rd_results = table_cat[var %in% binary_outcomes & category == "1", {
   rd     = (prop_1 - prop_0) * 100
   .(rd = rd)
 }, by = var]
-
-# composite RD
-comp_rd = composite_counts[, {
-  prop_0 = prop[ca_01 == 0]
-  prop_1 = prop[ca_01 == 1]
-  rd     = (prop_1 - prop_0) * 100
-  .(var = "composite", rd = rd)
-}]
-
-rd_results = rbindlist(list(rd_results, comp_rd))
 
 # LOS risk differences
 los_rd = table_cat[var == "los", {
@@ -425,10 +323,10 @@ los_rd = table_cat[var == "los", {
 
 rd_all = rbindlist(list(rd_results[, category := "1"], los_rd), fill = TRUE)
 
-## build Table 3 ---------------------------------------------------------------
+## variable labels and assembly ------------------------------------------------
 
 var_labels_t3 = data.table(
-  var   = c("composite", "d_noicu", "h_noicu", "wicu",
+  var   = c("composite", "warddeath", "hospicedc", "wardicu",
             "dead", "hospice", "va", "imv", "los"),
   label = c(
     "Primary composite outcome, n (%)",
@@ -443,10 +341,6 @@ var_labels_t3 = data.table(
   )
 )
 
-# Rebuild all_data with composite
-all_data = rbindlist(list(n_row, cont_wide, cat_wide), fill = TRUE)
-all_data = merge(all_data, var_labels, by = "var", all.x = TRUE)
-
 table3 = all_data[var %in% outcome_vars]
 table3[var == "los" & category == "0-47h",    category := "< 2 days"]
 table3[var == "los" & category == "48h_96h",  category := "2-4 days"]
@@ -459,18 +353,17 @@ table3 = merge(table3, rd_all, by = c("var", "category"), all.x = TRUE)
 table3 = merge(table3, var_labels_t3, by = "var", all.x = TRUE, suffixes = c("_old", ""))
 
 table3[, display := fcase(
-  var %in% c("composite", "d_noicu", "h_noicu", "wicu",
-             "dead", "hospice", "va", "imv") & category == "1", label,
-  var == "los" & is.na(category), label,
-  !is.na(category) & category != "", paste0("  ", category),
+  var %in% binary_outcomes & category == "1", label,
+  var == "los" & is.na(category),             label,
+  !is.na(category) & category != "",          paste0("  ", category),
   default = label
 )]
 
 table3[, sort_key := fcase(
   var == "composite", 1L,
-  var == "d_noicu",   2L,
-  var == "h_noicu",   3L,
-  var == "wicu",      4L,
+  var == "warddeath", 2L,
+  var == "hospicedc", 3L,
+  var == "wardicu",   4L,
   var == "dead",      5L,
   var == "hospice",   6L,
   var == "va",        7L,
@@ -525,8 +418,7 @@ save_as_docx(ft3, path = here("output", "tables", paste0("table3_outcomes_", tod
 
 message("\n== Tables complete ==")
 
-# Export objects for figures script
-table2_final       = table2
-table3_final       = table3
-flow_diagram_final = flow_diagram
-flow_data_final    = flow_data
+# Export objects for downstream scripts
+table2_final    = table2
+table3_final    = table3
+flow_data_final = flow_data
