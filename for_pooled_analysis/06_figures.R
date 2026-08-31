@@ -766,10 +766,16 @@ ggsave(here("output", "figures", "figure_s06_auroc_heterogeneity.pdf"),
 #   - Full code only
 #   - No ED admission requirement
 #   - 24-hour horizon, naive (treats repeated obs as independent)
-#   - 24-hour horizon, clustered bootstrap (accounts for non-independence)
+#   - 24-hour horizon, cluster bootstrap, all observations retained
+#   - 24-hour horizon, encounter-weighted bootstrap (one obs per encounter)
 #
-# The two 24-hour rows illustrate how accounting for within-encounter
-# correlation widens the CI enough that it crosses zero, per the Results.
+# The three 24-hour rows separate two distinct problems with the fixed-horizon
+# analysis. The cluster bootstrap corrects the non-independence of repeated
+# observations and widens the CI around the SAME observation-weighted estimate.
+# The encounter-weighted bootstrap changes the estimand: one observation is
+# drawn per resampled encounter, so a seven-day stay and a one-day stay
+# contribute equally, which is the sensitivity analysis for differential time
+# at risk. Neither row substitutes for the other.
 
 message("\n== Building Supp Figure 7 (robustness of AUROC gap) ==")
 
@@ -793,8 +799,9 @@ if (exists("VARIANT_N")) {
   )
 }
 
-sf7_h24_naive_label = "24h horizon (naive)"
-sf7_h24_boot_label  = "24h horizon (bootstrap)"
+sf7_h24_naive_label   = "24h horizon (naive)"
+sf7_h24_boot_label    = "24h horizon (cluster bootstrap)"
+sf7_h24_bootenc_label = "24h horizon (one obs/encounter)"
 
 ## Part 1: sensitivity-analysis variant diffs (encounter-level) --------------
 # Use auroc_results_final (site-level meta-analyzed AUROCs); compute the
@@ -868,7 +875,7 @@ sf7_h24n = sf7_h24n_aurocs |>
 
 sf7_h24b = data.table()
 
-compute_boot_h24 = function(boot_dt) {
+compute_boot_h24 = function(boot_dt, row_key_out = "h24_bootstrap") {
   
   if (!is.data.table(boot_dt)) boot_dt = as.data.table(boot_dt)
   if (nrow(boot_dt) == 0) return(data.table())
@@ -884,7 +891,7 @@ compute_boot_h24 = function(boot_dt) {
   iter_col = intersect(c("iter", "boot_iter", "bootstrap_iter", "b"), nms)[1]
   
   if (is.na(iter_col)) {
-    message("    boot_h24_raw has no recognizable iteration column; skipping bootstrap row.")
+    message("    ", row_key_out, ": no recognizable iteration column; skipping row.")
     return(data.table())
   }
   
@@ -897,7 +904,7 @@ compute_boot_h24 = function(boot_dt) {
       diff_lower = quantile(get(diff_col), 0.025, na.rm = TRUE, names = FALSE),
       diff_upper = quantile(get(diff_col), 0.975, na.rm = TRUE, names = FALSE)
     ), by = score_name]
-    out[, row_key := "h24_bootstrap"]
+    out[, row_key := row_key_out]
     return(out[, .(score_name, row_key, diff, diff_lower, diff_upper)])
   }
   
@@ -917,7 +924,7 @@ compute_boot_h24 = function(boot_dt) {
         diff_lower = quantile(diff, 0.025, na.rm = TRUE, names = FALSE),
         diff_upper = quantile(diff, 0.975, na.rm = TRUE, names = FALSE)
       ), by = score_name]
-      out[, row_key := "h24_bootstrap"]
+      out[, row_key := row_key_out]
       return(out[, .(score_name, row_key, diff, diff_lower, diff_upper)])
     }
   }
@@ -952,27 +959,45 @@ compute_boot_h24 = function(boot_dt) {
       diff_lower = quantile(diff, 0.025, na.rm = TRUE, names = FALSE),
       diff_upper = quantile(diff, 0.975, na.rm = TRUE, names = FALSE)
     ), by = score_name]
-    out[, row_key := "h24_bootstrap"]
+    out[, row_key := row_key_out]
     return(out[, .(score_name, row_key, diff, diff_lower, diff_upper)])
   }
   
-  message("    boot_h24_raw columns: ", paste(nms, collapse = ", "))
-  message("    -> structure not recognized; skipping bootstrap row.")
+  message("    ", row_key_out, " columns: ", paste(nms, collapse = ", "))
+  message("    -> structure not recognized; skipping row.")
   data.table()
 }
 
 if (exists("boot_h24_raw") && nrow(boot_h24_raw) > 0) {
-  sf7_h24b = compute_boot_h24(boot_h24_raw)
+  sf7_h24b = compute_boot_h24(boot_h24_raw, row_key_out = "h24_bootstrap")
   if (nrow(sf7_h24b) > 0) {
-    message("  24h bootstrap diff computed for ", nrow(sf7_h24b), " scores.")
+    message("  24h cluster-bootstrap diff computed for ", nrow(sf7_h24b), " scores.")
   }
 } else {
-  message("  boot_h24_raw not available; skipping bootstrap row.")
+  message("  boot_h24_raw not available; skipping cluster-bootstrap row.")
+}
+
+## Part 4: 24-hour horizon, encounter-weighted bootstrap ---------------------
+# Same artifact grammar as Part 3 (per-iteration cell counts with an `iter`
+# column), so the same reader applies. The difference is upstream: each
+# iteration holds one observation per resampled encounter rather than all of
+# them, which removes length of stay from the weighting.
+
+sf7_h24be = data.table()
+
+if (exists("bootenc_h24_raw") && nrow(bootenc_h24_raw) > 0) {
+  sf7_h24be = compute_boot_h24(bootenc_h24_raw, row_key_out = "h24_bootenc")
+  if (nrow(sf7_h24be) > 0) {
+    message("  24h encounter-weighted bootstrap diff computed for ",
+            nrow(sf7_h24be), " scores.")
+  }
+} else {
+  message("  bootenc_h24_raw not available; skipping encounter-weighted row.")
 }
 
 ## Combine all rows and build the figure ------------------------------------
 
-sf7_all = rbindlist(list(sf7_sens, sf7_h24n, sf7_h24b),
+sf7_all = rbindlist(list(sf7_sens, sf7_h24n, sf7_h24b, sf7_h24be),
                     use.names = TRUE, fill = TRUE)
 
 # Belt-and-suspenders: normalize score_name before format_score() so any
@@ -987,12 +1012,14 @@ sf7_all[, score_name := tolower(str_remove(score_name, "_total$"))]
 sf7_row_order = c(
   names(sf7_variant_labels),
   "h24_naive",
-  "h24_bootstrap"
+  "h24_bootstrap",
+  "h24_bootenc"
 )
 sf7_row_labels = c(
   sf7_variant_labels,
   h24_naive     = sf7_h24_naive_label,
-  h24_bootstrap = sf7_h24_boot_label
+  h24_bootstrap = sf7_h24_boot_label,
+  h24_bootenc   = sf7_h24_bootenc_label
 )
 
 sf7_all[, `:=`(
@@ -1002,6 +1029,7 @@ sf7_all[, `:=`(
     row_key %in% names(sf7_variant_labels), "Sensitivity analyses",
     row_key == "h24_naive",                 "24-hour horizon",
     row_key == "h24_bootstrap",             "24-hour horizon",
+    row_key == "h24_bootenc",               "24-hour horizon",
     default = NA_character_
   )
 )]
@@ -1038,7 +1066,7 @@ sf7 = ggplot(sf7_all,
   coord_flip() +
   labs(
     x = NULL, y = "AUROC Difference (Cancer − Non-Cancer)",
-    caption = "Positive values indicate higher discrimination in cancer patients.\nThe 24-hour naive row omits a CI because treating repeated observations as independent produces misleadingly tight uncertainty; the clustered bootstrap row reports the honest CI for that horizon."
+    caption = "Positive values indicate higher discrimination in cancer patients.\nThe 24-hour naive row omits a CI because treating repeated observations as independent produces misleadingly tight uncertainty.\nThe cluster bootstrap row reports the honest CI for the same observation-weighted estimate; the one-observation-per-encounter row reweights encounters equally, removing length of stay from the estimate."
   ) +
   theme_ews() +
   theme(
