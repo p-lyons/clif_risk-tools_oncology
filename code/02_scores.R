@@ -446,7 +446,7 @@ rm(vital_lab_extract)
 
 rm(resp, labs, vitals_list, get_each_vital); gc()
 
-# carryforward (vs 4h, labs 12h) -----------------------------------------------
+# carryforward (vitals 6h, labs 12h) -------------------------------------------
 
 ## set up locf parameters ------------------------------------------------------
 
@@ -1171,17 +1171,36 @@ if (t2_composite_n != n_composite) {
 message(sprintf("✅ Table 2 QC passed | %s ED-admit encounters.", format(n_t2, big.mark = ",")))
 
 ## export table 2 --------------------------------------------------------------
-# Small-cell suppression: every categorical count below 10 is exported as the
-# string "<10". The pooled loader (coerce_suppressed_counts) parses this marker
-# and imputes a value in [0, 9]; rows are never dropped, so pooled denominators
-# remain reconstructible. Applied at export only, AFTER the QC above, which
-# needs exact counts.
+# Small-cell suppression, scoped to the agreed policy: a cell is masked only
+# where its VALUE could function as a quasi-identifier, which is race,
+# ethnicity, language, and age bin. Score values, outcome flags, code status,
+# length-of-stay bins, and comorbidity bins carry no suppression at any count.
+# A site would publish those unredacted in a single-center report, and masking
+# an outcome cell would put an imputed integer into the pooled event counts,
+# since coerce_suppressed_counts() replaces the "<N" marker with a random value
+# in [0, N-1]. Threshold is five, per the same policy.
+#
+# Applied at export only, AFTER the QC above, which needs exact counts.
 
-n_masked = sum(t2_cat$n < 10)
+SUPPRESS_VARS = c("race_category", "ethnicity_category", "language_category", "age")
+SUPPRESS_MIN  = 5L
 
-t2_cat_export = ftransform(t2_cat, n = if_else(n < 10, "<10", as.character(n)))
+t2_suppress = t2_cat$var %in% SUPPRESS_VARS & t2_cat$n < SUPPRESS_MIN
+n_masked    = sum(t2_suppress)
 
-message(sprintf("  table_02_cat: %d cell(s) below 10 masked as \"<10\".", n_masked))
+t2_cat_export = ftransform(
+  t2_cat,
+  n = if_else(t2_suppress, paste0("<", SUPPRESS_MIN), as.character(n))
+)
+
+## QC: no cell outside the policy scope may leave the site masked.
+
+n_small_unmasked = sum(!(t2_cat$var %in% SUPPRESS_VARS) & t2_cat$n < SUPPRESS_MIN)
+
+message(sprintf(
+  "  table_02_cat: %d quasi-identifier cell(s) below %d masked as \"<%d\"; %d small cell(s) in non-identifier variables exported exact, by policy.",
+  n_masked, SUPPRESS_MIN, SUPPRESS_MIN, n_small_unmasked
+))
 
 fwrite(t2_cat_export, here(BOX_DIR, paste0("table_02_cat_",  site_lowercase, ".csv")))
 fwrite(t2_cont,       here(BOX_DIR, paste0("table_02_cont_", site_lowercase, ".csv")))
@@ -1299,7 +1318,8 @@ rm(t2_cohort, n_t2, outcome_flags, t2_flag_cols,
    n_composite, n_nohospice, n_wardicu, n_warddeath, n_hospicedc,
    miss_summary, n_denom,
    t2_cont, age_breaks, age_labs, ages_cat, elix_breaks, elix_labs, elix_cat,
-   l_breaks, l_labs, los_cat, t2_cat, t2_cat_export, race_other, n_masked,
+   l_breaks, l_labs, los_cat, t2_cat, t2_cat_export, race_other,
+   SUPPRESS_VARS, SUPPRESS_MIN, t2_suppress, n_masked, n_small_unmasked,
    t2_composite_n,
    has_dx_primary, adm_dx_raw, hosp_order, adm_dx_first, adm_dx_enc,
    adm_dx_chapter, adm_dx_stem); gc()
