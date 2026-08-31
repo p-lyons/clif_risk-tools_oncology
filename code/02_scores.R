@@ -1114,6 +1114,36 @@ t2_cat =
   rowbind(elix_cat) |>
   rowbind(los_cat)
 
+## collapse rare race categories -----------------------------------------------
+# Site-level cells for the rarest race categories can be small enough to be
+# identifying. American Indian or Alaska Native and Native Hawaiian or Other
+# Pacific Islander are folded into the existing other/unknown level at every
+# site (three rows become one), so the pooled table carries one consistent
+# category set. Alternate spellings of the residual level are folded too.
+
+race_other = c(
+  "american indian or alaska native",
+  "native hawaiian or other pacific islander",
+  "other/unknown",
+  "other_unknown",
+  "other",
+  "unknown",
+  "two or more races"
+)
+
+t2_cat =
+  ftransform(
+    t2_cat,
+    category = if_else(
+      var == "race_category" & category %in% race_other,
+      "other/unknown",
+      category
+    )
+  ) |>
+  fgroup_by(ca_01, var, category) |>
+  fsummarize(n = fsum(n)) |>
+  fungroup()
+
 ## quality control -------------------------------------------------------------
 
 ### check for sample size mismatch in continuous table -------------------------
@@ -1141,9 +1171,20 @@ if (t2_composite_n != n_composite) {
 message(sprintf("✅ Table 2 QC passed | %s ED-admit encounters.", format(n_t2, big.mark = ",")))
 
 ## export table 2 --------------------------------------------------------------
+# Small-cell suppression: every categorical count below 10 is exported as the
+# string "<10". The pooled loader (coerce_suppressed_counts) parses this marker
+# and imputes a value in [0, 9]; rows are never dropped, so pooled denominators
+# remain reconstructible. Applied at export only, AFTER the QC above, which
+# needs exact counts.
 
-fwrite(t2_cat,  here(BOX_DIR, paste0("table_02_cat_",  site_lowercase, ".csv")))
-fwrite(t2_cont, here(BOX_DIR, paste0("table_02_cont_", site_lowercase, ".csv")))
+n_masked = sum(t2_cat$n < 10)
+
+t2_cat_export = ftransform(t2_cat, n = if_else(n < 10, "<10", as.character(n)))
+
+message(sprintf("  table_02_cat: %d cell(s) below 10 masked as \"<10\".", n_masked))
+
+fwrite(t2_cat_export, here(BOX_DIR, paste0("table_02_cat_",  site_lowercase, ".csv")))
+fwrite(t2_cont,       here(BOX_DIR, paste0("table_02_cont_", site_lowercase, ".csv")))
 
 # admission diagnosis (reason for admission) -----------------------------------
 # Round-two export. Three-character ICD-10-CM stems are exported unmapped; the
@@ -1258,7 +1299,8 @@ rm(t2_cohort, n_t2, outcome_flags, t2_flag_cols,
    n_composite, n_nohospice, n_wardicu, n_warddeath, n_hospicedc,
    miss_summary, n_denom,
    t2_cont, age_breaks, age_labs, ages_cat, elix_breaks, elix_labs, elix_cat,
-   l_breaks, l_labs, los_cat, t2_cat, t2_composite_n,
+   l_breaks, l_labs, los_cat, t2_cat, t2_cat_export, race_other, n_masked,
+   t2_composite_n,
    has_dx_primary, adm_dx_raw, hosp_order, adm_dx_first, adm_dx_enc,
    adm_dx_chapter, adm_dx_stem); gc()
 
