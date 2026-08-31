@@ -998,7 +998,7 @@ for (outcome_key_l in c("composite", "nohospice")) {
 # by the encounter's resampled frequency and summing is identical to materializing
 # the expanded table, and keeps the per-iteration join to the collapsed cell set.
 
-message("\n== 03a: bootstrap horizon counts ==")
+message("\n== 03a: observation-weighted bootstrap horizon counts ==")
 
 run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 400L) {
 
@@ -1061,11 +1061,135 @@ run_horizon_counts_bootstrap = function(dt, horizons, site_lowercase, B = 400L) 
 }
 
 
+# --- encounter-weighted bootstrap horizon counts (composite / ca / main) ------
+# Companion to run_horizon_counts_bootstrap() above, and a DIFFERENT ESTIMAND.
+#
+#   variant "boot"    — encounters resampled, EVERY observation of a drawn
+#                       encounter retained. Observation-weighted. Long stays
+#                       dominate, exactly as they do in the reported
+#                       fixed-horizon point estimate, so this bootstrap is a
+#                       confidence interval for that estimate and nothing more.
+#
+#   variant "bootenc" — encounters resampled, then ONE time point drawn per
+#                       drawn encounter. Encounter-weighted. A seven-day stay
+#                       and a one-day stay contribute equally, so this is the
+#                       prespecified sensitivity analysis for differential time
+#                       at risk. It is not recoverable at the coordinating
+#                       center, because the pooled count artifacts have already
+#                       marginalized over encounter identity and length.
+#
+# The encounter-level maximum-score analysis does NOT cover this: the maximum is
+# one value per encounter but is itself length-dependent, since a longer stay has
+# more opportunities to reach a high value.
+#
+# Draw design (decision 1a): ONE time point is drawn per encounter and all five
+# scores recorded at that instant enter the resample, so the five score AUROCs
+# within an iteration are computed on the identical observation set. The draw is
+# also shared across horizons, so the 12- and 24-hour rows of an iteration
+# describe the same resampled encounters.
+
+message("\n== 03a: encounter-weighted bootstrap horizon counts ==")
+
+run_horizon_counts_bootstrap_enc = function(dt, horizons, site_lowercase, B = 400L) {
+
+  set.seed(2026L)
+
+  base_dt = as.data.table(dt)[
+    , .(joined_hosp_id, score_name, ca_01, value, h_from_admit, h_to_event)
+  ]
+  for (HH in horizons) base_dt[, (paste0("y_", HH)) := make_y(h_to_event, HH)]
+
+  n_scores = uniqueN(base_dt$score_name)
+
+  ## enumerate the distinct time points of each encounter and index them 1..n_tp
+  tp = unique(base_dt[, .(joined_hosp_id, h_from_admit)])
+  setorder(tp, joined_hosp_id, h_from_admit)
+  tp[, k    := rowid(joined_hosp_id)]
+  tp[, n_tp := .N, by = joined_hosp_id]
+
+  ## QC: the melt in materialize_variant_long() emits exactly one row per
+  ## (encounter, time, score), so the time-point table must reproduce the
+  ## observation count when multiplied by the number of scores. If it does not,
+  ## some encounter carries duplicate timestamps and a uniform draw over k would
+  ## not be a uniform draw over observations.
+  if (nrow(tp) * n_scores != nrow(base_dt)) {
+    stop(
+      sprintf("Encounter-weighted bootstrap: %d time points x %d scores != %d observations.",
+              nrow(tp), n_scores, nrow(base_dt)),
+      call. = FALSE
+    )
+  }
+
+  keyed = merge(base_dt, tp[, .(joined_hosp_id, h_from_admit, k)],
+                by = c("joined_hosp_id", "h_from_admit"), all.x = TRUE)
+  keep_cols = c("joined_hosp_id", "k", "score_name", "ca_01", "value",
+                paste0("y_", horizons))
+  keyed = keyed[, ..keep_cols]
+  setkey(keyed, joined_hosp_id, k)
+
+  enc_tp  = unique(tp[, .(joined_hosp_id, n_tp)])
+  enc_ids = enc_tp$joined_hosp_id
+  n_enc   = length(enc_ids)
+  setkey(enc_tp, joined_hosp_id)
+
+  expected_rows = as.numeric(n_enc) * n_scores
+
+  boot_list = vector("list", B)
+
+  for (b in seq_len(B)) {
+
+    draws = data.table(joined_hosp_id = sample(enc_ids, n_enc, replace = TRUE))
+    draws = enc_tp[draws, on = "joined_hosp_id"]
+    draws[, k := ceiling(runif(.N) * n_tp)]
+    setkey(draws, joined_hosp_id, k)
+
+    samp = keyed[draws, nomatch = NULL, allow.cartesian = TRUE]
+
+    if (nrow(samp) != expected_rows) {
+      stop(
+        sprintf("Encounter-weighted bootstrap iteration %d drew %d rows; expected %.0f.",
+                b, nrow(samp), expected_rows),
+        call. = FALSE
+      )
+    }
+
+    iter_list = vector("list", length(horizons))
+
+    for (i in seq_along(horizons)) {
+      HH   = horizons[i]
+      ycol = paste0("y_", HH)
+      agg  = samp[
+        , .(n = .N),
+        by = c("score_name", "ca_01", "value", ycol)
+      ]
+      setnames(agg, ycol, "outcome")
+      agg[, h := HH]
+      iter_list[[i]] = agg
+    }
+
+    boot_list[[b]] = rbindlist(iter_list, use.names = TRUE)[
+      , `:=`(site = site_lowercase, iter = b)
+    ]
+
+    if (b %% 50 == 0) message("    encounter-weighted bootstrap ", b, "/", B)
+  }
+
+  rbindlist(boot_list, use.names = TRUE)[]
+}
+
+
 long_main = materialize_variant_long("main", scores, fc, OUTCOMES[key == "composite"], STRATA[key == "ca"])
+
 counts_boot = run_horizon_counts_bootstrap(long_main, HORIZONS, site_lowercase, B = 400L)
 for (HH in HORIZONS) {
   write_artifact(counts_boot[h == HH], "horizon", "counts", site_lowercase,
                  strata = "ca", outcome = "composite", horizon = HH, variant = "boot")
+}
+
+counts_bootenc = run_horizon_counts_bootstrap_enc(long_main, HORIZONS, site_lowercase, B = 400L)
+for (HH in HORIZONS) {
+  write_artifact(counts_bootenc[h == HH], "horizon", "counts", site_lowercase,
+                 strata = "ca", outcome = "composite", horizon = HH, variant = "bootenc")
 }
 
 message("\n== 03a complete ==")

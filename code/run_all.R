@@ -138,6 +138,7 @@ EXPECTED_PATTERNS = c(
   "^threshold/leadtime-ca-composite-",
   "^threshold/crossclass-ca-composite-",
   "^horizon/counts-ca-composite-h24-",
+  "^horizon/counts-ca-composite-h24-bootenc-",
   "^sensitivity/maxscores-ca-composite-se_",
   "^sensitivity/maxscores-ca-cf6-",
   "^sensitivity/counts-ca-h24-cf6-",
