@@ -41,3 +41,18 @@ renv/cache/*
 renv/library
 .uvr/
 .vscode/
+
+# --- run products, not source ---
+output/
+qc_output/
+qc_report.html
+
+# coordinating-center site collection ({site}/{subdir}/file.csv)
+emory/
+hopkins/
+michigan/
+ohsu/
+rush/
+ucmc/
+umn/
+upenn/
