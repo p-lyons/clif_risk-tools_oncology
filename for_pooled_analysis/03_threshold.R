@@ -141,10 +141,14 @@ message("\n== Cumulative incidence of score positivity ==")
 
 ## aggregate across sites ------------------------------------------------------
 
+## Round-two note: the site artifact (03a_artifacts.R, cuminc_summary) emits
+## n_at_risk, n_became_pos, and a per-site cum_inc only. The round-one column
+## n_pos_in_bin no longer exists, so it is not aggregated here; cum_inc is
+## recomputed from the pooled counts immediately below.
+
 cuminc = cuminc_raw[, .(
   n_at_risk    = sum(n_at_risk),
-  n_became_pos = sum(n_became_pos),
-  n_pos_in_bin = sum(n_pos_in_bin)
+  n_became_pos = sum(n_became_pos)
 ), by = .(score, ca_01, o_primary_01, time_bin_start)]
 
 cuminc[, cum_inc := n_became_pos / n_at_risk]
