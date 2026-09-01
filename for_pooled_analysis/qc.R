@@ -57,7 +57,8 @@ SE_VARIANTS = c(
   "se_one_enc_per_pt"
 )
 CF_VARIANTS   = c("cf2", "cf6", "cf12")
-VARIANT_VOCAB = c(SE_VARIANTS, CF_VARIANTS, "boot")
+BOOT_VARIANTS = c("boot", "bootenc")
+VARIANT_VOCAB = c(SE_VARIANTS, CF_VARIANTS, BOOT_VARIANTS)
 
 #' Build an artifact filename (mirror of .build_filename in 03a_artifacts.R).
 build_artifact_filename = function(artifact, site, strata = NA, outcome = NA,
@@ -109,7 +110,7 @@ parse_artifact_filename = function(fn) {
 # One row per (subdir, artifact, strata); outcomes / horizons / variants list
 # the combinations that family ships. NA means the token is absent from the
 # filename. The expansion of this table over the eight sites IS the expected
-# file catalog (131 files per site, plus ten root files and the manifest).
+# file catalog (137 files per site, plus ten root files and the manifest).
 
 .fam = function(subdir, artifact, strata, outcomes = NA_character_,
                 horizons = NA_integer_, variants = NA_character_) {
@@ -149,8 +150,9 @@ expected_families = rbindlist(list(
   .fam("threshold", "first",      "ca",         ALL5),
   .fam("threshold", "upset",      "ca",         ALL5),
   .fam("threshold", "upset",      "components", ALL5),
-  .fam("threshold", "leadtime",   "ca",         COMP2),
-  .fam("threshold", "crossclass", "ca",         COMP2),
+  .fam("threshold", "leadtime",        "ca",    COMP2),
+  .fam("threshold", "leadtime_median", "ca",    COMP2),
+  .fam("threshold", "crossclass",      "ca",    COMP2),
 
   # horizon
   .fam("horizon", "auroc",  "ca",     ALL5,        c(12L, 24L)),
@@ -160,6 +162,7 @@ expected_families = rbindlist(list(
   .fam("horizon", "counts", "liquid", COMP2,       24L),
   .fam("horizon", "counts", "mets",   COMP2,       24L),
   .fam("horizon", "counts", "ca",     "composite", c(12L, 24L), "boot"),
+  .fam("horizon", "counts", "ca",     "composite", c(12L, 24L), "bootenc"),
 
   # sensitivity
   .fam("sensitivity", "auroc",     "ca", "composite", c(NA_integer_, 12L, 24L), SE_VARIANTS),
@@ -223,7 +226,8 @@ required_cols_for = function(artifact, strata, horizon, variant) {
 
   if (artifact == "counts") {
     base = c("score_name", g, "value", "outcome", "n", "site", "h")
-    return(c(base, if (!is.na(variant) && variant == "boot") "iter" else NULL))
+    is_boot = !is.na(variant) && variant %in% BOOT_VARIANTS
+    return(c(base, if (is_boot) "iter" else NULL))
   }
 
   if (artifact == "events") {
@@ -264,9 +268,18 @@ required_cols_for = function(artifact, strata, horizon, variant) {
              "n", "site"))
   }
 
+  # Round two: coarse bins plus a mean were replaced by poolable cumulative
+  # counts at fixed thresholds, and by exact per-unit medians computed on
+  # line-level data at the site. Both carry crossing_def (first / final_onset).
   if (artifact == "leadtime") {
-    return(c("score_name", "ca_01", "outcome_key", "lead_bin", "n",
-             "sum_hours", "sumsq_hours", "site"))
+    return(c("score_name", "ca_01", "outcome_key", "crossing_def",
+             "threshold_h", "n_at_or_below", "n_total", "site"))
+  }
+
+  if (artifact == "leadtime_median") {
+    return(c("score_name", "ca_01", "outcome_key", "crossing_def",
+             "unit", "unit_id", "n_events", "median_h", "q25_h", "q75_h",
+             "mean_h", "sd_h", "sum_hours", "sumsq_hours", "site"))
   }
 
   if (artifact == "crossclass") {

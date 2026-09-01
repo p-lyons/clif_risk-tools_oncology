@@ -61,7 +61,8 @@ VARIANT_VOCAB = c(
   "cf2",
   "cf6",
   "cf12",
-  "boot"
+  "boot",
+  "bootenc"
 )
 CF_VARIANTS = c("cf2", "cf6", "cf12")
 
@@ -567,6 +568,17 @@ flow_data_raw      = read_site_root_files(here(), "figure_s01_flow")
 run_report_raw     = read_site_root_files(here(), "run_report")
 hospital_types_raw = read_site_root_files(here(), "hospital_types")
 
+## admission diagnoses (R09) ---------------------------------------------------
+# Round-two exports from 02_scores.R. They sit at the site root rather than in an
+# analysis subdirectory, so build_file_catalog() never sees them and they need
+# the root reader. Primary hospital diagnosis per encounter, tallied by ICD-10-CM
+# chapter letter and by three-character code stem, stratified by cancer status.
+# Site tallies of five or fewer are already suppressed at export, so pooled
+# percentages are computed over the retained rows.
+
+adm_dx_chapter_raw = read_site_root_files(here(), "admission_dx_chapter")
+adm_dx_stem_raw    = read_site_root_files(here(), "admission_dx_stem")
+
 ## maxscores (encounter-level) -------------------------------------------------
 # maxscores_ca_raw carries analysis = main, the four se_ variants, and the
 # three carry-forward variants (decision 2a), composite outcome only.
@@ -656,6 +668,30 @@ boot_h12_raw = load_from_catalog(
   label     = "counts-ca h12 bootstrap"
 )
 
+## Encounter-weighted bootstrap (variant "bootenc"). Same file grammar as
+## "boot", different estimand: one observation is drawn per resampled encounter,
+## so long stays no longer dominate. "boot" gives the confidence interval for
+## the reported observation-weighted fixed-horizon AUROC; "bootenc" is the
+## prespecified sensitivity analysis for differential time at risk.
+
+bootenc_h24_raw = load_from_catalog(
+  FILE_CATALOG,
+  artifacts = "counts",
+  stratas   = "ca",
+  horizons  = 24L,
+  variants  = "bootenc",
+  label     = "counts-ca h24 encounter-weighted bootstrap"
+)
+
+bootenc_h12_raw = load_from_catalog(
+  FILE_CATALOG,
+  artifacts = "counts",
+  stratas   = "ca",
+  horizons  = 12L,
+  variants  = "bootenc",
+  label     = "counts-ca h12 encounter-weighted bootstrap"
+)
+
 ## threshold analyses ----------------------------------------------------------
 
 ever_all_raw = load_from_catalog(
@@ -725,6 +761,19 @@ leadtime_raw = load_from_catalog(
   artifacts = "leadtime",
   stratas   = "ca",
   label     = "leadtime-ca"
+)
+
+## Exact per-unit lead-time medians (health system and hospital_id), each with
+## its own n_events. These are deliberately NOT pooled into a single median;
+## 08_supplement.R reports the range across units after applying an event floor,
+## and the cumulative counts in leadtime_raw supply the encounter-weighted
+## counterpart independently.
+
+leadtime_median_raw = load_from_catalog(
+  FILE_CATALOG,
+  artifacts = "leadtime_median",
+  stratas   = "ca",
+  label     = "leadtime_median-ca"
 )
 
 crossclass_raw = load_from_catalog(
@@ -942,7 +991,11 @@ message("  Maxscores rows (composite): ", format_n(nrow(maxscores_ca_raw)))
 message("  Maxscores rows (all outcomes): ", format_n(nrow(maxscores_ca_all_raw)))
 message("  24h counts rows: ", format_n(nrow(counts_h24_raw)))
 message("  Site-level AUROCs (encounter, composite): ", format_n(nrow(auroc_enc_raw)))
+message("  Site-level AUROCs (encounter, all outcomes): ", format_n(nrow(auroc_enc_all_raw)))
 message("  Site-level AUROCs (24h, composite): ", format_n(nrow(auroc_h24_raw)))
+message("  Site-level AUROCs (12h, all outcomes): ", format_n(nrow(auroc_h12_all_raw)))
+message("  Admission diagnosis rows (chapter / stem): ",
+        format_n(nrow(adm_dx_chapter_raw)), " / ", format_n(nrow(adm_dx_stem_raw)))
 message("  Table02 cat rows: ", format_n(nrow(cat_data_raw)))
 
 # Validation check -------------------------------------------------------------
