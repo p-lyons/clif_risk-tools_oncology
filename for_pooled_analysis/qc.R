@@ -110,7 +110,7 @@ parse_artifact_filename = function(fn) {
 # One row per (subdir, artifact, strata); outcomes / horizons / variants list
 # the combinations that family ships. NA means the token is absent from the
 # filename. The expansion of this table over the eight sites IS the expected
-# file catalog (137 files per site, plus ten root files and the manifest).
+# file catalog (135 files per site, plus ten root files and the manifest).
 
 .fam = function(subdir, artifact, strata, outcomes = NA_character_,
                 horizons = NA_integer_, variants = NA_character_) {

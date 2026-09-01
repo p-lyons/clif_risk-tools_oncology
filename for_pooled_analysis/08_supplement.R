@@ -335,9 +335,45 @@ leadtime_median_table = data.table()
 # a long warning time from a score that flags most encounters is a different
 # claim from the same warning time at low positivity.
 
+#' Drop rows from a site that still ships the round-one schema.
+#' load_from_catalog() rbinds with fill = TRUE, so a site whose artifacts predate
+#' the round-two rewrite contributes rows with NA in every new column rather than
+#' failing. Those rows would surface as a phantom "<= NA h" column and a blank
+#' crossing definition. Detect, name the sites, and drop.
+drop_round_one = function(dt, required, label) {
+
+  d = as.data.table(dt)
+
+  missing_cols = setdiff(required, names(d))
+  if (length(missing_cols) > 0L) {
+    message("  ", label, ": missing column(s) ",
+            paste(missing_cols, collapse = ", "), "; skipping")
+    return(data.table())
+  }
+
+  stale = Reduce(`|`, lapply(required, function(cc) is.na(d[[cc]])))
+
+  if (any(stale)) {
+    stale_sites = sort(unique(d$site[stale]))
+    message("  ", label, ": dropped ", sum(stale), " round-one row(s) from ",
+            paste(stale_sites, collapse = ", "),
+            " — these site(s) must re-run 03b_leadtime.R")
+  }
+
+  d[!stale]
+}
+
 if (have("leadtime_raw")) {
 
-  lt = as.data.table(leadtime_raw)[, .(
+  lt = drop_round_one(leadtime_raw,
+                      c("crossing_def", "threshold_h", "n_at_or_below", "n_total"),
+                      "leadtime")
+
+  if (nrow(lt) == 0L) {
+    message("  leadtime: no round-two rows; skipping distribution table")
+  }
+
+  lt = lt[, .(
     n_at_or_below = sum(n_at_or_below),
     n_total       = sum(n_total)
   ), by = .(score_name, ca_01, outcome_key, crossing_def, threshold_h)]
@@ -384,7 +420,9 @@ LEADTIME_EVENT_FLOOR = 20L
 
 if (have("leadtime_median_raw")) {
 
-  lm = as.data.table(leadtime_median_raw)
+  lm = drop_round_one(leadtime_median_raw,
+                      c("crossing_def", "unit", "unit_id", "n_events", "median_h"),
+                      "leadtime_median")
 
   n_dropped = lm[unit == "hospital" & n_events < LEADTIME_EVENT_FLOOR, .N]
   if (n_dropped > 0L) {
