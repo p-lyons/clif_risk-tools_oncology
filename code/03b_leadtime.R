@@ -1,9 +1,9 @@
-# 03b_leadtime.R — lead time from first threshold crossing to deterioration (P6)
+# 03b_leadtime.R — lead time from threshold crossing to deterioration (P6)
 #
 # Reviewer 4 asked whether an alert affords an actionable window. For each
-# encounter, score, and outcome this reports the hours from the first
-# threshold-positive score to the event, exported as binned counts plus
-# sufficient statistics (never individual intervals), together with a four-cell
+# encounter, score, and outcome this reports the hours from a threshold-positive
+# score to the event, exported as poolable exceedance counts and as exact
+# per-unit medians (never individual intervals), together with a four-cell
 # crossed × event classification of every encounter.
 #
 #   Inputs (proj_tables/):  scores_full.parquet, cohort.parquet, outcome_times.parquet
@@ -12,9 +12,50 @@
 #
 # Positivity uses the standard THRESHOLDS with the NEWS any-3 rule, exactly as in
 # 03a's ever_positive block. scores_full is truncated before the event, so every
-# crossing precedes it and lead times are strictly positive (asserted, not
-# filtered). The crossclass denominator is the full cohort ED-admit set (from
-# outcome_times), matching 03a's sesp, so the QC ties out.
+# crossing precedes it and lead times are non-negative (asserted, not filtered).
+# The crossclass denominator is the full cohort ED-admit set (from outcome_times),
+# matching 03a's sesp, so the QC ties out.
+#
+# ------------------------------------------------------------------------------
+# Round-two redesign
+#
+# Round one exported nine coarse bins plus sum/sumsq, and the coordinating center
+# reported a mean. Both choices failed on the observed distribution: 91% of SIRS
+# crossings in the cancer cohort exceed 24 hours, so the median falls inside a
+# 96-hour-wide bin (or the open top bin) where interpolation is undefined, and a
+# mean of 182 hours with an SD of 255 describes a heavy right tail badly.
+#
+# Two artifacts replace the single binned file.
+#
+#   leadtime         Cumulative counts at fixed thresholds (6, 12, 24, 48, 72,
+#                    96, 168, 336 hours) with the denominator. These pool by
+#                    summation with no distributional assumption, and yield both
+#                    "within x" and "beyond x" by subtraction at the
+#                    coordinating center.
+#
+#   leadtime_median  Exact median and quartiles computed on line-level data at
+#                    the site, reported per health system AND per hospital_id,
+#                    each with its own n_events so the coordinating center can
+#                    apply an event floor before reporting a range. Sites are
+#                    NOT pooled into a single median; the range across units is
+#                    the reported statistic, and the exceedance curve above
+#                    supplies the encounter-weighted counterpart independently.
+#
+# Both carry crossing_def, taking two values.
+#
+#   first        Time from the FIRST threshold-positive score of the encounter
+#                to the event. The conventional definition, and what a reader
+#                expects. At the alert rates these scores carry (NEWS is
+#                ever-positive in 71% of encounters) it fires early in the stay
+#                and behaves partly as a length-of-stay measure.
+#
+#   final_onset  Time from the onset of the LAST uninterrupted positive run to
+#                the event: the alert that came on and stayed on going into the
+#                deterioration. Defined whenever the encounter ever crossed, so
+#                the denominator matches `first` exactly and the two are
+#                directly comparable. The gap between them measures how long a
+#                score sat positive without an event, which is the alert-burden
+#                argument in R13 and R14.
 
 if (!exists("BOX_DIR")) {
   stop("BOX_DIR not found. Did you run 00_setup first?", call. = FALSE)
@@ -34,34 +75,76 @@ LEADTIME_OUTCOMES = c("composite", "nohospice")
 OUT_FLAG  = c(composite = "o_composite_01",      nohospice = "o_nohospice_01")
 OUT_EVENT = c(composite = "event_composite_dttm", nohospice = "event_nohospice_dttm")
 
-LEAD_BREAKS = c(0, 2, 4, 8, 12, 24, 48, 72, 168, Inf)
-LEAD_LABELS = c("(0,2]", "(2,4]", "(4,8]", "(8,12]", "(12,24]", "(24,48]", "(48,72]", "(72,168]", ">168")
+# Cumulative thresholds, in hours. The short end (6, 12, 24) carries
+# final_onset, which is expected to concentrate under a day; the long end
+# (72 through 336) carries first, whose median sits somewhere past two days.
+# 48 is retained because two days is the landmark a clinician reads without
+# conversion and because it halves the bracket the pooled curve places around
+# the first-crossing median.
+LEAD_THRESHOLDS = c(6, 12, 24, 48, 72, 96, 168, 336)
+
+CROSSING_DEFS = c("first", "final_onset")
 
 # helpers ----------------------------------------------------------------------
 
-#' First threshold-positive time per (encounter, score), ED-admit only.
-#' Standard threshold crossings for all five scores, plus the NEWS single-
-#' parameter any-3 rule folded into news_total; earliest wins.
+#' Threshold-positive crossing times per (encounter, score), ED-admit only,
+#' under both crossing definitions.
+#'
+#' Positivity is the union of the standard threshold rule and, for NEWS, the
+#' single-parameter any-3 rule. Round one computed those two as separate tables
+#' and took the earlier; folding the any-3 rule into a single `pos` flag gives
+#' the identical first-crossing time and additionally makes the positivity
+#' SERIES available, which final_onset requires.
+#'
+#' Runs are identified with the standard cumsum-of-negatives trick: within an
+#' encounter and score ordered by time, every positive row in the same
+#' uninterrupted run shares a run_grp value, and later runs carry larger values.
+#' The last run is therefore the one whose run_grp is maximal among positive
+#' rows, and its onset is that run's earliest time.
 compute_crossings = function(scores, thresholds) {
 
   sc_ed = as.data.table(scores)[ed_admit_01 == 1L]
 
   long = melt(sc_ed,
-    id.vars       = c("joined_hosp_id", "time"),
+    id.vars       = c("joined_hosp_id", "time", "news_any3"),
     measure.vars  = thresholds$score_name,
     variable.name = "score_name", value.name = "value")
   long[, score_name := as.character(score_name)]
   long = merge(long, thresholds, by = "score_name")
 
-  cross_std = long[value >= threshold][
-    order(time), .(cross_time = time[1L]), by = .(joined_hosp_id, score_name)]
+  long[, pos := as.integer(!is.na(value) & value >= threshold)]
+  long[score_name == "news_total" & !is.na(news_any3) & news_any3 == 1L, pos := 1L]
 
-  cross_n3 = sc_ed[news_any3 == 1L][
-    order(time), .(cross_time = time[1L]), by = joined_hosp_id][
-    , score_name := "news_total"]
+  setorder(long, joined_hosp_id, score_name, time)
+  long[, run_grp := cumsum(pos == 0L), by = .(joined_hosp_id, score_name)]
 
-  rbindlist(list(cross_std, cross_n3), use.names = TRUE)[
-    order(cross_time), .(cross_time = cross_time[1L]), by = .(joined_hosp_id, score_name)]
+  pos_rows = long[pos == 1L]
+  pos_rows[, run_max := max(run_grp), by = .(joined_hosp_id, score_name)]
+
+  first_cross = pos_rows[
+    , .(cross_time = time[1L]), by = .(joined_hosp_id, score_name)
+  ][, crossing_def := "first"]
+
+  final_cross = pos_rows[
+    run_grp == run_max, .(cross_time = time[1L]), by = .(joined_hosp_id, score_name)
+  ][, crossing_def := "final_onset"]
+
+  # The two definitions must describe the identical set of crossed encounters,
+  # since final_onset is the onset of a run that first_cross also sees.
+  if (nrow(first_cross) != nrow(final_cross)) {
+    stop("Crossing definitions disagree on which encounters ever crossed.", call. = FALSE)
+  }
+
+  out = rbindlist(list(first_cross, final_cross), use.names = TRUE)
+
+  # final_onset can never precede first: it is the onset of a later or identical run
+  chk = dcast(out, joined_hosp_id + score_name ~ crossing_def, value.var = "cross_time")
+  if (any(chk$final_onset < chk$first)) {
+    stop("final_onset precedes first crossing; run identification is wrong.", call. = FALSE)
+  }
+
+  rm(long, pos_rows, chk)
+  out[]
 }
 
 #' Lead-time + crossclass artifacts for one outcome.
@@ -77,7 +160,7 @@ leadtime_for_outcome = function(outcome_key, scores, cohort, outcome_tt, crossin
 
   # full cohort ED-admit denominator with this outcome's flag (matches 03a sesp)
   ae = merge(
-    cohort[ed_admit_01 == 1L, .(joined_hosp_id, ca_01)],
+    cohort[ed_admit_01 == 1L, .(joined_hosp_id, ca_01, hospital_id)],
     outcome_tt[, .(joined_hosp_id, o_out = get(flag))],
     by = "joined_hosp_id", all.x = TRUE
   )
@@ -86,9 +169,14 @@ leadtime_for_outcome = function(outcome_key, scores, cohort, outcome_tt, crossin
   # per-encounter event time (for lead), from scores
   enc_ev = scores[ed_admit_01 == 1L, .(event_dttm = get(evc)[1L]), by = joined_hosp_id]
 
-  # encounter × score grid, classified by crossed × event
-  grid = ae[, .(score_name = THRESHOLDS$score_name), by = .(joined_hosp_id, ca_01, o_out)]
-  grid = merge(grid, crossings, by = c("joined_hosp_id", "score_name"), all.x = TRUE)
+  # encounter × score grid. crossclass is a property of the encounter, not of the
+  # crossing definition, so it is built from the `first` rows only; the crossed
+  # set is identical either way (asserted in compute_crossings).
+  cross_first = crossings[crossing_def == "first", .(joined_hosp_id, score_name, cross_time)]
+
+  grid = ae[, .(score_name = THRESHOLDS$score_name),
+            by = .(joined_hosp_id, ca_01, hospital_id, o_out)]
+  grid = merge(grid, cross_first, by = c("joined_hosp_id", "score_name"), all.x = TRUE)
   grid[, `:=`(crossed = as.integer(!is.na(cross_time)), event = o_out)]
 
   crossclass = grid[
@@ -96,38 +184,128 @@ leadtime_for_outcome = function(outcome_key, scores, cohort, outcome_tt, crossin
   ][, `:=`(outcome_key = outcome_key, site = site_lowercase)]
   setcolorder(crossclass, c("score_name", "ca_01", "outcome_key", "crossed", "event", "n", "site"))
 
-  # lead time for encounters that crossed AND had the event
-  lead = merge(grid[crossed == 1L & event == 1L], enc_ev, by = "joined_hosp_id", all.x = TRUE)
+  # lead time for encounters that crossed AND had the event, under both definitions
+  eligible = grid[crossed == 1L & event == 1L,
+                  .(joined_hosp_id, score_name, ca_01, hospital_id)]
+
+  lead = merge(eligible, crossings, by = c("joined_hosp_id", "score_name"),
+               allow.cartesian = TRUE)
+  lead = merge(lead, enc_ev, by = "joined_hosp_id", all.x = TRUE)
   lead[, lead_h := as.numeric(difftime(event_dttm, cross_time, units = "hours"))]
 
   if (nrow(lead) > 0L && any(lead$lead_h < 0, na.rm = TRUE)) {
     stop(sprintf("Negative lead time for outcome '%s' (%d rows).",
                  outcome_key, sum(lead$lead_h < 0, na.rm = TRUE)), call. = FALSE)
   }
+  if (anyNA(lead$lead_h)) {
+    stop(sprintf("Missing lead time for outcome '%s' (%d rows).",
+                 outcome_key, sum(is.na(lead$lead_h))), call. = FALSE)
+  }
 
-  lead[, lead_bin := as.character(cut(lead_h, breaks = LEAD_BREAKS, labels = LEAD_LABELS, right = TRUE))]
+  ## artifact 1: cumulative counts at fixed thresholds -------------------------
+  # One row per (score, cohort, crossing_def, threshold). n_at_or_below and
+  # n_total both pool by summation, so the coordinating center can report
+  # "within x hours" directly and "beyond x hours" as n_total - n_at_or_below.
 
-  # cut() with right = TRUE and a lowest break of 0 leaves the first interval
-  # (0,2] left-open, so lead_h == 0 falls into no bin and returns NA. The
-  # time < end_dttm truncation makes lead times strictly positive in continuous
-  # time, but an exact timestamp tie (cross_time == event_dttm) yields lead_h == 0
-  # and a silent NA bin -- which the lead_h < 0 check above (na.rm = TRUE) does not
-  # catch. Fail loudly rather than emit a signal-less lead_bin = NA row.
-  stopifnot(!anyNA(lead$lead_bin))
-
-  leadtime = lead[
-    , .(n = .N, sum_hours = sum(lead_h), sumsq_hours = sum(lead_h^2)),
-    by = .(score_name, ca_01, lead_bin)
+  lead_cum = lead[
+    , .(
+      threshold_h   = LEAD_THRESHOLDS,
+      n_at_or_below = vapply(LEAD_THRESHOLDS, function(t) sum(lead_h <= t), numeric(1)),
+      n_total       = .N
+    ),
+    by = .(score_name, ca_01, crossing_def)
   ][, `:=`(outcome_key = outcome_key, site = site_lowercase)]
-  setcolorder(leadtime, c("score_name", "ca_01", "outcome_key", "lead_bin", "n", "sum_hours", "sumsq_hours", "site"))
 
-  # QC: crossclass events (summed over crossed) reproduce the sesp event counts
+  setcolorder(lead_cum, c("score_name", "ca_01", "outcome_key", "crossing_def",
+                          "threshold_h", "n_at_or_below", "n_total", "site"))
+
+  ## artifact 2: exact medians per unit ----------------------------------------
+  # Computed on line-level lead_h at the site, so no interpolation is involved.
+  # Emitted for the health system as a whole and for each hospital_id, each with
+  # its own n_events. Sites are deliberately NOT pooled: the coordinating center
+  # reports the range across units, and applies an event floor using n_events
+  # rather than having that choice made here.
+
+  # Expects dt to carry a unit_id column already; returns one row per
+  # (score, cohort, crossing_def, unit_id).
+  median_block = function(dt, unit_lab) {
+    dt[
+      , {
+        q = as.numeric(quantile(lead_h, probs = c(0.25, 0.50, 0.75),
+                                type = 7, names = FALSE))
+        .(
+          unit        = unit_lab,
+          n_events    = .N,
+          median_h    = q[2],
+          q25_h       = q[1],
+          q75_h       = q[3],
+          mean_h      = mean(lead_h),
+          sd_h        = if (.N > 1L) sd(lead_h) else NA_real_,
+          sum_hours   = sum(lead_h),
+          sumsq_hours = sum(lead_h^2)
+        )
+      },
+      by = .(score_name, ca_01, crossing_def, unit_id)
+    ]
+  }
+
+  lead_sys = copy(lead)[, unit_id := site_lowercase]
+  lead_hos = copy(lead)[, unit_id := as.character(hospital_id)]
+
+  lead_median = rbindlist(
+    list(
+      median_block(lead_sys, "health_system"),
+      median_block(lead_hos, "hospital")
+    ),
+    use.names = TRUE
+  )[, `:=`(outcome_key = outcome_key, site = site_lowercase)]
+
+  setcolorder(lead_median, c("score_name", "ca_01", "outcome_key", "crossing_def",
+                             "unit", "unit_id", "n_events", "median_h",
+                             "q25_h", "q75_h", "mean_h", "sd_h",
+                             "sum_hours", "sumsq_hours", "site"))
+
+  ## QC ------------------------------------------------------------------------
+  # The health-system rows must account for exactly the same events as the
+  # threshold artifact's denominator, and the hospital rows must sum to them.
+
+  denom_cum = unique(lead_cum[, .(score_name, ca_01, crossing_def, n_total)])
+  denom_sys = lead_median[unit == "health_system",
+                          .(score_name, ca_01, crossing_def, n_sys = n_events)]
+  denom_hos = lead_median[unit == "hospital",
+                          .(n_hos = sum(n_events)), by = .(score_name, ca_01, crossing_def)]
+
+  chk = merge(denom_cum, denom_sys, by = c("score_name", "ca_01", "crossing_def"))
+  chk = merge(chk,      denom_hos, by = c("score_name", "ca_01", "crossing_def"))
+
+  if (any(chk$n_total != chk$n_sys) || any(chk$n_total != chk$n_hos)) {
+    stop(sprintf("Lead-time denominators disagree across artifacts for outcome '%s'.",
+                 outcome_key), call. = FALSE)
+  }
+
+  # The cumulative counts must be monotone non-decreasing in threshold_h.
+  mono = lead_cum[order(threshold_h),
+                  .(ok = all(diff(n_at_or_below) >= 0)),
+                  by = .(score_name, ca_01, crossing_def)]
+  if (any(!mono$ok)) {
+    stop("Cumulative lead-time counts are not monotone in threshold.", call. = FALSE)
+  }
+
+  # final_onset can never exceed first, so its cumulative count at any threshold
+  # must be at least as large.
+  ord = dcast(lead_cum, score_name + ca_01 + threshold_h ~ crossing_def,
+              value.var = "n_at_or_below")
+  if (any(ord$final_onset < ord$first)) {
+    stop("final_onset lead times exceed first-crossing lead times.", call. = FALSE)
+  }
+
+  # crossclass events (summed over crossed) reproduce the sesp event counts
   sesp_path = here(BOX_DIR, "threshold", paste0("sesp-ca-", outcome_key, "-", site_lowercase, ".csv"))
   if (file.exists(sesp_path)) {
     sesp   = fread(sesp_path)
     cc_ev  = crossclass[event == 1L, .(n_ev = sum(n)), by = .(score_name, ca_01)]
-    chk    = merge(sesp[, .(score_name, ca_01, n_outcome)], cc_ev, by = c("score_name", "ca_01"))
-    if (nrow(chk) != nrow(cc_ev) || any(chk$n_outcome != chk$n_ev)) {
+    chk2   = merge(sesp[, .(score_name, ca_01, n_outcome)], cc_ev, by = c("score_name", "ca_01"))
+    if (nrow(chk2) != nrow(cc_ev) || any(chk2$n_outcome != chk2$n_ev)) {
       stop(sprintf("crossclass event counts disagree with sesp for outcome '%s'.", outcome_key),
            call. = FALSE)
     }
@@ -135,7 +313,7 @@ leadtime_for_outcome = function(outcome_key, scores, cohort, outcome_tt, crossin
     message("  (sesp artifact not found for ", outcome_key, "; skipping cross-check)")
   }
 
-  list(leadtime = leadtime, crossclass = crossclass)
+  list(leadtime = lead_cum, leadtime_median = lead_median, crossclass = crossclass)
 }
 
 # run --------------------------------------------------------------------------
@@ -148,14 +326,29 @@ outcome_tt = as.data.table(read_parquet(here("proj_tables", "outcome_times.parqu
 
 crossings = compute_crossings(scores, THRESHOLDS)
 
+message("  Crossings: ",
+        format(uniqueN(crossings[, .(joined_hosp_id, score_name)]), big.mark = ","),
+        " encounter-score pairs, both definitions")
+
 thr_dir = here(BOX_DIR, "threshold")
 if (!dir.exists(thr_dir)) dir.create(thr_dir, recursive = TRUE, showWarnings = FALSE)
 
 for (ok in LEADTIME_OUTCOMES) {
+
   message("  outcome: ", ok)
+
   res = leadtime_for_outcome(ok, scores, cohort, outcome_tt, crossings, site_lowercase)
-  fwrite(res$leadtime,   file.path(thr_dir, paste0("leadtime-ca-",   ok, "-", site_lowercase, ".csv")))
-  fwrite(res$crossclass, file.path(thr_dir, paste0("crossclass-ca-", ok, "-", site_lowercase, ".csv")))
+
+  fwrite(res$leadtime,
+         file.path(thr_dir, paste0("leadtime-ca-", ok, "-", site_lowercase, ".csv")))
+  fwrite(res$leadtime_median,
+         file.path(thr_dir, paste0("leadtime_median-ca-", ok, "-", site_lowercase, ".csv")))
+  fwrite(res$crossclass,
+         file.path(thr_dir, paste0("crossclass-ca-", ok, "-", site_lowercase, ".csv")))
+
+  message(sprintf("    %d threshold rows | %d median rows (%d hospital unit(s))",
+                  nrow(res$leadtime), nrow(res$leadtime_median),
+                  uniqueN(res$leadtime_median[unit == "hospital"]$unit_id)))
 }
 
 message("\n== 03b complete ==")
